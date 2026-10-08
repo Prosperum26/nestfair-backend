@@ -34,6 +34,15 @@ export interface Session {
   persistent: boolean;
 }
 
+/** Thông tin lấy từ profile Google (GoogleStrategy). */
+export interface GoogleProfile {
+  googleId: string;
+  email?: string;
+  emailVerified: boolean;
+  fullName?: string;
+  avatarUrl?: string;
+}
+
 const hashToken = (raw: string) =>
   createHash('sha256').update(raw).digest('hex');
 
@@ -93,6 +102,55 @@ export class AuthService {
 
     const { passwordHash: _, ...user } = found;
     return this.createSession(user, dto.rememberMe ?? true);
+  }
+
+  /**
+   * Đăng nhập Google: theo googleId → nếu chưa có thì liên kết theo email đã xác minh
+   * → nếu chưa có tài khoản thì tạo mới (không có mật khẩu).
+   */
+  async loginWithGoogle(profile: GoogleProfile): Promise<Session> {
+    const linked = await this.prisma.user.findUnique({
+      where: { googleId: profile.googleId },
+      select: publicUserSelect,
+    });
+    if (linked) return this.createSession(linked, true);
+
+    const email = profile.email?.trim().toLowerCase();
+    // Chỉ tin email Google đã xác minh, nếu không ai đó có thể chiếm tài khoản mật khẩu cùng email.
+    if (!email || !profile.emailVerified) {
+      throw new UnauthorizedException(
+        'Tài khoản Google này chưa xác minh email.',
+      );
+    }
+
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, avatarUrl: true },
+    });
+    const user = existing
+      ? await this.prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            googleId: profile.googleId,
+            ...(!existing.avatarUrl &&
+              profile.avatarUrl && { avatarUrl: profile.avatarUrl }),
+          },
+          select: publicUserSelect,
+        })
+      : await this.prisma.user.create({
+          data: {
+            email,
+            googleId: profile.googleId,
+            fullName: (profile.fullName?.trim() || email.split('@')[0]).slice(
+              0,
+              80,
+            ),
+            avatarUrl: profile.avatarUrl,
+          },
+          select: publicUserSelect,
+        });
+
+    return this.createSession(user, true);
   }
 
   /** Xoay vòng: token cũ bị thu hồi, cấp token mới cùng lựa chọn "ghi nhớ". */

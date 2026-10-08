@@ -26,6 +26,7 @@ function createPrismaMock() {
     user: {
       findUnique: vi.fn(),
       create: vi.fn(),
+      update: vi.fn(),
     },
     refreshToken: {
       create: vi.fn().mockResolvedValue({}),
@@ -76,7 +77,9 @@ describe('AuthService', () => {
       const data = prisma.user.create.mock.calls[0][0].data;
       expect(data.passwordHash).not.toBe(dto.password);
       expect(data.passwordHash).toMatch(/^\$2b\$10\$/);
-      await expect(bcrypt.compare(dto.password, data.passwordHash)).resolves.toBe(true);
+      await expect(
+        bcrypt.compare(dto.password, data.passwordHash),
+      ).resolves.toBe(true);
     });
 
     it('chỉ select các cột công khai khi tạo user', async () => {
@@ -117,7 +120,9 @@ describe('AuthService', () => {
     it('email đã tồn tại thì 409', async () => {
       prisma.user.findUnique.mockResolvedValue({ id: 'other' });
 
-      await expect(service.register(dto)).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.register(dto)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
       expect(prisma.user.create).not.toHaveBeenCalled();
     });
 
@@ -130,7 +135,9 @@ describe('AuthService', () => {
         }),
       );
 
-      await expect(service.register(dto)).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.register(dto)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
     });
   });
 
@@ -163,13 +170,18 @@ describe('AuthService', () => {
       });
 
       expect(session.persistent).toBe(false);
-      expect(prisma.refreshToken.create.mock.calls[0][0].data.persistent).toBe(false);
+      expect(prisma.refreshToken.create.mock.calls[0][0].data.persistent).toBe(
+        false,
+      );
     });
 
     it.each([
       ['sai mật khẩu', () => ({ ...publicUser, passwordHash })],
       ['email không tồn tại', () => null],
-      ['tài khoản chỉ có Google (không có mật khẩu)', () => ({ ...publicUser, passwordHash: null })],
+      [
+        'tài khoản chỉ có Google (không có mật khẩu)',
+        () => ({ ...publicUser, passwordHash: null }),
+      ],
     ])('%s thì 401 với cùng một thông báo', async (_, user) => {
       prisma.user.findUnique.mockResolvedValue(user());
 
@@ -215,12 +227,22 @@ describe('AuthService', () => {
     it.each<[string, string | undefined, () => unknown]>([
       ['không có cookie', undefined, () => null],
       ['token không tồn tại', raw, () => null],
-      ['token đã bị thu hồi (dùng lại token cũ)', raw, () => stored({ revokedAt: new Date() })],
-      ['token hết hạn', raw, () => stored({ expiresAt: new Date(Date.now() - 1) })],
+      [
+        'token đã bị thu hồi (dùng lại token cũ)',
+        raw,
+        () => stored({ revokedAt: new Date() }),
+      ],
+      [
+        'token hết hạn',
+        raw,
+        () => stored({ expiresAt: new Date(Date.now() - 1) }),
+      ],
     ])('%s thì 401', async (_, token, found) => {
       prisma.refreshToken.findUnique.mockResolvedValue(found());
 
-      await expect(service.refresh(token)).rejects.toBeInstanceOf(UnauthorizedException);
+      await expect(service.refresh(token)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
       expect(prisma.refreshToken.create).not.toHaveBeenCalled();
     });
 
@@ -228,7 +250,9 @@ describe('AuthService', () => {
       prisma.refreshToken.findUnique.mockResolvedValue(stored());
       prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
 
-      await expect(service.refresh(raw)).rejects.toBeInstanceOf(UnauthorizedException);
+      await expect(service.refresh(raw)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
       expect(prisma.refreshToken.create).not.toHaveBeenCalled();
     });
   });
@@ -249,6 +273,99 @@ describe('AuthService', () => {
     });
   });
 
+  describe('loginWithGoogle', () => {
+    const profile = {
+      googleId: 'g-123',
+      email: 'hung@uit.edu.vn',
+      emailVerified: true,
+      fullName: 'Trần Minh Hùng',
+      avatarUrl: 'https://lh3.googleusercontent.com/a/x',
+    };
+
+    it('đã liên kết googleId thì đăng nhập luôn, không sửa gì', async () => {
+      prisma.user.findUnique.mockResolvedValueOnce(publicUser);
+
+      const session = await service.loginWithGoogle(profile);
+
+      expect(prisma.user.findUnique.mock.calls[0][0].where).toEqual({
+        googleId: 'g-123',
+      });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      expect(session.user).toEqual(publicUser);
+      expect(session.persistent).toBe(true);
+    });
+
+    it('email đã có tài khoản mật khẩu thì liên kết googleId vào tài khoản đó', async () => {
+      prisma.user.findUnique
+        .mockResolvedValueOnce(null) // theo googleId
+        .mockResolvedValueOnce({ id: publicUser.id, avatarUrl: null }); // theo email
+      prisma.user.update.mockResolvedValue(publicUser);
+
+      await service.loginWithGoogle(profile);
+
+      expect(prisma.user.findUnique.mock.calls[1][0].where).toEqual({
+        email: 'hung@uit.edu.vn',
+      });
+      const args = prisma.user.update.mock.calls[0][0];
+      expect(args.where).toEqual({ id: publicUser.id });
+      expect(args.data).toEqual({
+        googleId: 'g-123',
+        avatarUrl: profile.avatarUrl,
+      });
+      expect(args.select.passwordHash).toBeUndefined();
+      expect(prisma.user.create).not.toHaveBeenCalled();
+    });
+
+    it('liên kết không ghi đè avatar người dùng đã có', async () => {
+      prisma.user.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: publicUser.id,
+          avatarUrl: 'https://res.cloudinary.com/a.png',
+        });
+      prisma.user.update.mockResolvedValue(publicUser);
+
+      await service.loginWithGoogle(profile);
+
+      expect(prisma.user.update.mock.calls[0][0].data).toEqual({
+        googleId: 'g-123',
+      });
+    });
+
+    it('chưa có tài khoản thì tạo mới, không có mật khẩu', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.create.mockResolvedValue(publicUser);
+
+      await service.loginWithGoogle({ ...profile, email: 'HUNG@UIT.EDU.VN' });
+
+      expect(prisma.user.create.mock.calls[0][0].data).toEqual({
+        email: 'hung@uit.edu.vn',
+        googleId: 'g-123',
+        fullName: 'Trần Minh Hùng',
+        avatarUrl: profile.avatarUrl,
+      });
+    });
+
+    it('email Google chưa xác minh thì 401, không liên kết', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.loginWithGoogle({ ...profile, emailVerified: false }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(prisma.user.create).not.toHaveBeenCalled();
+    });
+
+    it('Google không trả email thì 401', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.loginWithGoogle({ ...profile, email: undefined }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+  });
+
   describe('me', () => {
     it('trả user công khai', async () => {
       prisma.user.findUnique.mockResolvedValue(publicUser);
@@ -259,7 +376,9 @@ describe('AuthService', () => {
     it('user đã bị xóa thì 401', async () => {
       prisma.user.findUnique.mockResolvedValue(null);
 
-      await expect(service.me(publicUser.id)).rejects.toBeInstanceOf(UnauthorizedException);
+      await expect(service.me(publicUser.id)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
     });
   });
 });

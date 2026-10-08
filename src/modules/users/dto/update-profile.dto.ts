@@ -37,7 +37,8 @@ export class UpdateProfileDto {
     type: String,
     nullable: true,
     example: '970407',
-    description: 'Mã BIN Napas 6 số của ngân hàng (VietQR). Đi cùng bankAccount.',
+    description:
+      'Mã BIN Napas 6 số của ngân hàng (VietQR). Đi cùng bankAccount.',
   })
   @IsOptional()
   @Matches(/^\d{6}$/, { message: 'Mã ngân hàng không hợp lệ.' })

@@ -48,7 +48,10 @@ describe('Users (e2e)', () => {
 
   it('cần JWT', async () => {
     await request(app.getHttpServer()).get('/api/v1/users/me').expect(401);
-    await request(app.getHttpServer()).patch('/api/v1/users/me').send({}).expect(401);
+    await request(app.getHttpServer())
+      .patch('/api/v1/users/me')
+      .send({})
+      .expect(401);
   });
 
   it('GET trả hồ sơ, không có passwordHash', async () => {
@@ -61,8 +64,14 @@ describe('Users (e2e)', () => {
   });
 
   it('lưu tài khoản nhận tiền (bỏ khoảng trắng trong STK)', async () => {
-    const res = await patch({ bankBin: '970436', bankAccount: '0071 0004 4456' }).expect(200);
-    expect(res.body).toMatchObject({ bankBin: '970436', bankAccount: '007100044456' });
+    const res = await patch({
+      bankBin: '970436',
+      bankAccount: '0071 0004 4456',
+    }).expect(200);
+    expect(res.body).toMatchObject({
+      bankBin: '970436',
+      bankAccount: '007100044456',
+    });
   });
 
   it('xóa tài khoản nhận tiền bằng null', async () => {

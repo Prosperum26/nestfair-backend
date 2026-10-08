@@ -50,7 +50,10 @@ describe('Auth (e2e)', () => {
   describe('POST /auth/register', () => {
     it('tạo tài khoản, trả access token + cookie httpOnly, không lộ mật khẩu', async () => {
       const body = valid();
-      const res = await http().post('/api/v1/auth/register').send(body).expect(201);
+      const res = await http()
+        .post('/api/v1/auth/register')
+        .send(body)
+        .expect(201);
 
       expect(res.body.accessToken).toEqual(expect.any(String));
       expect(res.body.user).toMatchObject({
@@ -58,14 +61,18 @@ describe('Auth (e2e)', () => {
         fullName: 'Trần Minh Hùng',
         phone: '0901234567',
       });
-      expect(JSON.stringify(res.body)).not.toMatch(/password|MatKhau123|googleId/i);
+      expect(JSON.stringify(res.body)).not.toMatch(
+        /password|MatKhau123|googleId/i,
+      );
 
       const cookie = refreshCookie(res);
       expect(cookie).toMatch(/HttpOnly/i);
       expect(cookie).toMatch(/Path=\/api\/v1\/auth/);
       expect(cookie).toMatch(/Expires=/);
 
-      const row = await prisma.user.findUniqueOrThrow({ where: { email: body.email } });
+      const row = await prisma.user.findUniqueOrThrow({
+        where: { email: body.email },
+      });
       expect(row.passwordHash).toMatch(/^\$2b\$10\$/);
     });
 
@@ -77,7 +84,9 @@ describe('Auth (e2e)', () => {
         .post('/api/v1/auth/register')
         .send({ ...body, email: body.email.toUpperCase() })
         .expect(409);
-      expect(res.body.message).toBe('Email này đã được dùng. Bạn muốn đăng nhập?');
+      expect(res.body.message).toBe(
+        'Email này đã được dùng. Bạn muốn đăng nhập?',
+      );
     });
 
     it.each([
@@ -89,7 +98,10 @@ describe('Auth (e2e)', () => {
       ['thiếu họ tên', { fullName: '' }],
       ['gửi thêm field lạ', { role: 'ADMIN' }],
     ])('%s thì 400', async (_, over) => {
-      const res = await http().post('/api/v1/auth/register').send(valid(over)).expect(400);
+      const res = await http()
+        .post('/api/v1/auth/register')
+        .send(valid(over))
+        .expect(400);
       expect(res.body).toMatchObject({ statusCode: 400, error: 'Bad Request' });
     });
   });
@@ -112,16 +124,29 @@ describe('Auth (e2e)', () => {
     it('rememberMe = false thì cookie phiên (không có Expires)', async () => {
       const res = await http()
         .post('/api/v1/auth/login')
-        .send({ email: account.email, password: account.password, rememberMe: false })
+        .send({
+          email: account.email,
+          password: account.password,
+          rememberMe: false,
+        })
         .expect(200);
       expect(refreshCookie(res)).not.toMatch(/Expires=/);
     });
 
     it.each([
-      ['sai mật khẩu', () => ({ email: account.email, password: 'SaiMatKhau1' })],
-      ['email không tồn tại', () => ({ email: email('ghost'), password: 'MatKhau123' })],
+      [
+        'sai mật khẩu',
+        () => ({ email: account.email, password: 'SaiMatKhau1' }),
+      ],
+      [
+        'email không tồn tại',
+        () => ({ email: email('ghost'), password: 'MatKhau123' }),
+      ],
     ])('%s thì 401 cùng thông báo', async (_, payload) => {
-      const res = await http().post('/api/v1/auth/login').send(payload()).expect(401);
+      const res = await http()
+        .post('/api/v1/auth/login')
+        .send(payload())
+        .expect(401);
       expect(res.body.message).toBe('Email hoặc mật khẩu không đúng.');
     });
   });
@@ -129,11 +154,17 @@ describe('Auth (e2e)', () => {
   describe('phiên đăng nhập: me / refresh / logout', () => {
     it('GET /auth/me cần JWT hợp lệ', async () => {
       await http().get('/api/v1/auth/me').expect(401);
-      await http().get('/api/v1/auth/me').set('Authorization', 'Bearer rac').expect(401);
+      await http()
+        .get('/api/v1/auth/me')
+        .set('Authorization', 'Bearer rac')
+        .expect(401);
     });
 
     it('luồng đầy đủ: register → me → refresh xoay vòng → token cũ bị từ chối → logout', async () => {
-      const reg = await http().post('/api/v1/auth/register').send(valid()).expect(201);
+      const reg = await http()
+        .post('/api/v1/auth/register')
+        .send(valid())
+        .expect(201);
       const firstCookie = cookiePair(refreshCookie(reg));
 
       const me = await http()
@@ -154,10 +185,19 @@ describe('Auth (e2e)', () => {
         .expect(200);
 
       // Dùng lại token đã xoay vòng thì bị từ chối.
-      await http().post('/api/v1/auth/refresh').set('Cookie', firstCookie).expect(401);
+      await http()
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', firstCookie)
+        .expect(401);
 
-      await http().post('/api/v1/auth/logout').set('Cookie', secondCookie).expect(204);
-      await http().post('/api/v1/auth/refresh').set('Cookie', secondCookie).expect(401);
+      await http()
+        .post('/api/v1/auth/logout')
+        .set('Cookie', secondCookie)
+        .expect(204);
+      await http()
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', secondCookie)
+        .expect(401);
     });
 
     it('refresh không có cookie thì 401', async () => {

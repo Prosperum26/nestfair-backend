@@ -34,7 +34,9 @@ export class UsersController {
     summary: 'Cập nhật họ tên, SĐT, tài khoản nhận tiền (ngân hàng + STK)',
   })
   @ApiOkResponse({ type: PublicUserDto })
-  @ApiBadRequestResponse({ description: 'Sai định dạng hoặc thiếu cặp ngân hàng / STK' })
+  @ApiBadRequestResponse({
+    description: 'Sai định dạng hoặc thiếu cặp ngân hàng / STK',
+  })
   updateMe(
     @CurrentUser() user: AuthUser,
     @Body() dto: UpdateProfileDto,
