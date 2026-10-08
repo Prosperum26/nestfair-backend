@@ -1,5 +1,5 @@
 // NestFair — Prisma schema
-// Issue #3 (auth): User + RefreshToken. House / HouseMember thêm ở bước onboarding.
+// Issue #3: User, RefreshToken, House, HouseMember.
 
 generator client {
   provider            = "prisma-client"
@@ -28,6 +28,7 @@ model User {
   updatedAt    DateTime @updatedAt
 
   refreshTokens RefreshToken[]
+  memberships   HouseMember[]
 
   @@map("users")
 }
@@ -47,4 +48,47 @@ model RefreshToken {
 
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+enum HouseRole {
+  /// Trưởng phòng: người tạo nhà.
+  ADMIN
+  ROOMMATE
+}
+
+model House {
+  id              String   @id @default(uuid()) @db.Uuid
+  name            String
+  address         String?
+  /// Số người tối đa (2–10). Đủ người thì không vào thêm được.
+  maxMembers      Int
+  /// 6 ký tự in hoa, bỏ ký tự dễ nhầm (0, O, 1, I). Không phân biệt hoa thường khi nhập.
+  inviteCode      String   @unique
+  inviteExpiresAt DateTime
+  rules           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  members HouseMember[]
+
+  @@map("houses")
+}
+
+/// Rời nhà thì đặt leftAt, không xóa dòng (giữ lịch sử chi tiêu, việc nhà).
+/// Partial unique index (SQL tay trong migration): mỗi người tối đa 1 membership
+/// còn hiệu lực (leftAt IS NULL) trong một nhà.
+model HouseMember {
+  id       String    @id @default(uuid()) @db.Uuid
+  houseId  String    @db.Uuid
+  userId   String    @db.Uuid
+  role     HouseRole @default(ROOMMATE)
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([houseId])
+  @@index([userId])
+  @@map("house_members")
 }
