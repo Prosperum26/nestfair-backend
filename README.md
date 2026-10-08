@@ -39,11 +39,56 @@ src/
 ├── generated/prisma/   Prisma client (sinh ra, không commit)
 └── modules/
     ├── auth/           đăng ký, đăng nhập, refresh token, Google OAuth, JwtAuthGuard, @CurrentUser
-    └── users/          hồ sơ + tài khoản nhận tiền (ngân hàng + STK)
+    ├── users/          hồ sơ + tài khoản nhận tiền (ngân hàng + STK)
+    └── houses/         nhà, mã mời, thành viên; HouseMemberGuard, HouseRolesGuard, @CurrentMembership
 test/                   e2e
 ```
 
 Module mới: `src/modules/<tên>/` gồm `<tên>.module.ts`, controller, service, `dto/`, test `*.spec.ts` cạnh service. Route cần đăng nhập dùng `@UseGuards(JwtAuthGuard)` và lấy user bằng `@CurrentUser()`; trả user ra ngoài luôn qua `publicUserSelect`.
+
+### Thêm một module thuộc nhà (chores, expenses…)
+
+Mọi dữ liệu của một nhà đi qua route `/houses/:houseId/...` và **luôn** có `HouseMemberGuard`:
+
+```ts
+// chores.module.ts
+@Module({ imports: [HousesModule], controllers: [ChoresController], providers: [ChoresService] })
+export class ChoresModule {}
+
+// chores.controller.ts
+@UseGuards(JwtAuthGuard, HouseMemberGuard)
+@Controller('houses/:houseId/chores')
+export class ChoresController {
+  @Get()
+  list(@CurrentMembership() m: HouseMembership) {
+    return this.chores.list(m.houseId); // houseId đã xác thực, không lấy từ body/query
+  }
+
+  @Post()
+  @HouseRoles('ADMIN')
+  @UseGuards(HouseRolesGuard) // chỉ trưởng phòng
+  create(@CurrentMembership() m: HouseMembership, @Body() dto: CreateChoreDto) { ... }
+}
+```
+
+- `HouseMemberGuard`: houseId sai định dạng trả 404; không phải thành viên (hoặc đã rời nhà) trả 403. Gắn `{ id, houseId, userId, role }` vào request.
+- Query trong service luôn lọc theo `m.houseId`; id con (choreId…) phải kiểm tra thuộc đúng nhà đó, nếu không thành viên nhà A sửa được dữ liệu nhà B.
+- Thành viên còn ở nhà: `leftAt: null`.
+
+## Dữ liệu demo
+
+```bash
+npm run seed       # Nhà 12A + 4 tài khoản, chạy lại bao nhiêu lần cũng được
+```
+
+| Email | Vai trò | Ngân hàng |
+| :--- | :--- | :--- |
+| `hung@nestfair.demo` | Trưởng phòng | Techcombank |
+| `thien@nestfair.demo` | Thành viên | Vietcombank |
+| `mai@nestfair.demo` | Thành viên | ACB |
+| `quan@nestfair.demo` | Thành viên | MB Bank |
+
+Mật khẩu chung: `NestFair123`. Mã mời Nhà 12A: `K7M2QZ` (seed đặt lại hạn 7 ngày mỗi lần chạy). Nhà 12A tối đa 5 người nên còn 1 chỗ để thử luồng vào nhà bằng mã.
 
 ## Auth (tóm tắt)
 
