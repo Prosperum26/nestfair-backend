@@ -1,0 +1,18 @@
+# Postgres cho môi trường dev. Máy mới: `docker compose up -d`.
+services:
+  postgres:
+    image: postgres:17
+    container_name: nestfair-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nestfair
+      POSTGRES_PASSWORD: nestfair
+      POSTGRES_DB: nestfair
+    ports:
+      - '5433:5432'
+    volumes:
+      - nestfair-pgdata:/var/lib/postgresql/data
+
+volumes:
+  nestfair-pgdata:
+    name: nestfair-pgdata

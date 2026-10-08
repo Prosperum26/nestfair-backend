@@ -1,0 +1,48 @@
+// NestFair — Prisma schema
+// Issue #3 (auth): User + RefreshToken. House / HouseMember thêm ở bước onboarding.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  /// Null khi tài khoản chỉ đăng nhập bằng Google.
+  passwordHash String?
+  googleId     String?  @unique
+  fullName     String
+  phone        String?
+  /// Mã BIN 6 số của ngân hàng (Napas), dùng cho VietQR.
+  bankBin      String?
+  bankAccount  String?
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+/// Mỗi phiên đăng nhập (thiết bị) một dòng. Chỉ lưu hash, xoay vòng mỗi lần refresh.
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
