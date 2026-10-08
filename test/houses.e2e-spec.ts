@@ -335,6 +335,31 @@ describe('Houses (e2e)', () => {
     });
   });
 
+  describe('chống IDOR giữa các nhà', () => {
+    it('trưởng phòng nhà A không xem / đổi mã của nhà B', async () => {
+      const hung = await user('Hùng');
+      const quan = await user('Quân');
+      await createHouse(hung.token, { name: 'Nhà A' });
+      const houseB = await createHouse(quan.token, { name: 'Nhà B' });
+
+      await as(hung.token).get(`/api/v1/houses/${houseB.id}`).expect(403);
+      await as(hung.token)
+        .post(`/api/v1/houses/${houseB.id}/invite-code`)
+        .expect(403);
+      const unchanged = await prisma.house.findUniqueOrThrow({
+        where: { id: houseB.id },
+      });
+      expect(unchanged.inviteCode).toBe(houseB.inviteCode);
+    });
+
+    it('houseId không tồn tại trả 403 như nhà của người khác (không lộ nhà nào có thật)', async () => {
+      const hung = await user('Hùng');
+      await as(hung.token)
+        .get('/api/v1/houses/00000000-0000-4000-8000-000000000000')
+        .expect(403);
+    });
+  });
+
   describe('POST /houses/:houseId/invite-code', () => {
     it('trưởng phòng tạo mã mới, mã cũ hết hiệu lực', async () => {
       const hung = await user('Hùng');
