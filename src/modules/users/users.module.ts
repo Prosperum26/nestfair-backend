@@ -1,5 +1,11 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module.js';
+import { UsersController } from './users.controller.js';
+import { UsersService } from './users.service.js';
 
-// Placeholder. Bước sau thêm GET/PATCH /users/me (hồ sơ + STK ngân hàng).
-@Module({})
+@Module({
+  imports: [AuthModule],
+  controllers: [UsersController],
+  providers: [UsersService],
+})
 export class UsersModule {}
