@@ -29,8 +29,9 @@ export class Env {
   @MinLength(64)
   JWT_SECRET: string;
 
-  @IsString()
-  JWT_ACCESS_TTL = '15m';
+  @Type(() => Number)
+  @IsInt()
+  JWT_ACCESS_TTL_MINUTES: number = 15;
 
   @Type(() => Number)
   @IsInt()

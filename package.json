@@ -24,7 +24,7 @@
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
     "db:up": "docker start nestfair-postgres || docker compose up -d",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate": "prisma migrate dev && prisma generate",
     "postinstall": "prisma generate"
   },
   "dependencies": {

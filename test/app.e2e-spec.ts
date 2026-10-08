@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from './../src/app.module.js';
+import { configureApp } from './../src/app.setup.js';
 
 // Cần Postgres đang chạy (npm run db:up) và .env hợp lệ.
 describe('Health (e2e)', () => {
@@ -14,7 +15,7 @@ describe('Health (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    app.setGlobalPrefix('api/v1');
+    configureApp(app);
     await app.init();
   });
 

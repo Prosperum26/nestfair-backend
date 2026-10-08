@@ -34,12 +34,14 @@ model User {
 
 /// Mỗi phiên đăng nhập (thiết bị) một dòng. Chỉ lưu hash, xoay vòng mỗi lần refresh.
 model RefreshToken {
-  id        String    @id @default(uuid()) @db.Uuid
-  userId    String    @db.Uuid
-  tokenHash String    @unique
-  expiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  tokenHash  String    @unique
+  /// "Ghi nhớ đăng nhập": true = cookie có hạn 7 ngày, false = cookie phiên (mất khi đóng trình duyệt).
+  persistent Boolean   @default(true)
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
