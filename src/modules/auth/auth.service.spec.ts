@@ -318,12 +318,10 @@ describe('AuthService', () => {
     });
 
     it('liên kết không ghi đè avatar người dùng đã có', async () => {
-      prisma.user.findUnique
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({
-          id: publicUser.id,
-          avatarUrl: 'https://res.cloudinary.com/a.png',
-        });
+      prisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({
+        id: publicUser.id,
+        avatarUrl: 'https://res.cloudinary.com/a.png',
+      });
       prisma.user.update.mockResolvedValue(publicUser);
 
       await service.loginWithGoogle(profile);
