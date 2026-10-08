@@ -139,6 +139,40 @@ describe('Houses (e2e)', () => {
       ]);
     });
 
+    it('thành viên thấy ngân hàng + 4 số cuối STK của nhau, không thấy STK đầy đủ, email', async () => {
+      const hung = await user('Hùng');
+      const thien = await user('Thiện');
+      await as(hung.token)
+        .post('/api/v1/houses', { name: 'Nhà 12A', maxMembers: 4 })
+        .expect(201);
+      await http()
+        .patch('/api/v1/users/me')
+        .set('Authorization', `Bearer ${hung.token}`)
+        .send({ bankBin: '970407', bankAccount: '19036780123' })
+        .expect(200);
+      const house = (await as(hung.token).get('/api/v1/houses').expect(200))
+        .body[0];
+      const code = (
+        await as(hung.token).get(`/api/v1/houses/${house.id}`).expect(200)
+      ).body.inviteCode;
+
+      const res = await as(thien.token)
+        .post('/api/v1/houses/join', { inviteCode: code })
+        .expect(200);
+
+      const admin = res.body.members[0];
+      expect(admin).toMatchObject({
+        bankBin: '970407',
+        bankAccountLast4: '0123',
+      });
+      expect(JSON.stringify(res.body)).not.toContain('19036780123');
+      expect(JSON.stringify(res.body)).not.toContain(DOMAIN);
+      expect(res.body.members[1]).toMatchObject({
+        bankBin: null,
+        bankAccountLast4: null,
+      });
+    });
+
     it('đã ở trong nhà thì 409 (kể cả trưởng phòng)', async () => {
       const hung = await user('Hùng');
       const thien = await user('Thiện');

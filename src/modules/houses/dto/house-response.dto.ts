@@ -5,6 +5,20 @@ export class HouseMemberDto {
   @ApiProperty({ format: 'uuid' }) userId: string;
   @ApiProperty() fullName: string;
   @ApiProperty({ type: String, nullable: true }) avatarUrl: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: '970407',
+    description: 'Mã BIN ngân hàng nhận tiền',
+  })
+  bankBin: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: '0123',
+    description: '4 số cuối STK (không trả STK đầy đủ)',
+  })
+  bankAccountLast4: string | null;
   @ApiProperty({ enum: HouseRole, enumName: 'HouseRole' }) role: HouseRole;
   @ApiProperty() joinedAt: Date;
 }

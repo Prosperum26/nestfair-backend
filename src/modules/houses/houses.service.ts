@@ -131,7 +131,15 @@ export class HousesService {
           select: {
             role: true,
             joinedAt: true,
-            user: { select: { id: true, fullName: true, avatarUrl: true } },
+            user: {
+              select: {
+                id: true,
+                fullName: true,
+                avatarUrl: true,
+                bankBin: true,
+                bankAccount: true,
+              },
+            },
           },
         },
       },
@@ -145,6 +153,9 @@ export class HousesService {
         userId: user.id,
         fullName: user.fullName,
         avatarUrl: user.avatarUrl,
+        // Thẻ thành viên chỉ hiện "TCB ·0123"; STK đầy đủ chỉ lộ khi cần trả tiền (VietQR, module thanh toán).
+        bankBin: user.bankBin,
+        bankAccountLast4: user.bankAccount?.slice(-4) ?? null,
         role,
         joinedAt,
       })),
