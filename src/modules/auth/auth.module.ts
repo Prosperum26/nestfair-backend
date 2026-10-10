@@ -41,6 +41,6 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
         isGoogleEnabled(config) ? new GoogleStrategy(config) : null,
     },
   ],
-  exports: [JwtAuthGuard],
+  exports: [JwtAuthGuard, JwtModule],
 })
 export class AuthModule {}
