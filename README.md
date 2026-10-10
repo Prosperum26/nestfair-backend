@@ -40,7 +40,11 @@ src/
 └── modules/
     ├── auth/           đăng ký, đăng nhập, refresh token, Google OAuth, JwtAuthGuard, @CurrentUser
     ├── users/          hồ sơ + tài khoản nhận tiền (ngân hàng + STK)
-    └── houses/         nhà, mã mời, thành viên; HouseMemberGuard, HouseRolesGuard, @CurrentMembership
+    ├── houses/         nhà, mã mời, thành viên; HouseMemberGuard, HouseRolesGuard, @CurrentMembership
+    ├── chores/         việc nhà, xoay vòng công bằng (algorithms/), check-in ảnh, duyệt chéo
+    ├── events/         Socket.IO gateway, EventsService (room house:<id>, user:<id>)
+    ├── scheduler/      cron: tạo lịch tuần mới (CN 20:00), đánh dấu MISSED (mỗi giờ), múi giờ VN
+    └── uploads/        CloudinaryService + kiểm tra ảnh (jpeg/png/webp, 5MB)
 test/                   e2e
 ```
 
@@ -102,3 +106,7 @@ Mật khẩu chung: `NestFair123`. Mã mời Nhà 12A: `K7M2QZ` (seed đặt l�
 1. Google Cloud Console → APIs & Services → Credentials → OAuth client ID (Web application).
 2. Authorized redirect URI: `http://localhost:5000/api/v1/auth/google/callback` (production: URL backend thật).
 3. Điền `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL` vào `.env`, khởi động lại server.
+
+### Bật upload ảnh (Cloudinary)
+
+Check-in việc nhà cần ảnh minh chứng. Điền `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` vào `.env` (lấy ở Cloudinary Dashboard). Chưa điền thì `POST /assignments/:id/checkin` trả `503`.
