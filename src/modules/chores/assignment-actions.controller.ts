@@ -1,8 +1,10 @@
 import {
+  Body,
   Controller,
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   UploadedFile,
   UseGuards,
@@ -30,6 +32,7 @@ import type { AuthUser } from '../auth/strategies/jwt.strategy.js';
 import type { UploadedImage } from '../uploads/image-validation.js';
 import { AssignmentsService } from './assignments.service.js';
 import { AssignmentDto } from './dto/assignment-response.dto.js';
+import { VerifyAssignmentDto } from './dto/verify-assignment.dto.js';
 
 /** Giới hạn cứng của multer để không đọc file khổng lồ vào RAM; quy tắc 5MB nằm ở validateImageFile. */
 const HARD_LIMIT_BYTES = 10 * 1024 * 1024;
@@ -82,5 +85,20 @@ export class AssignmentActionsController {
     @UploadedFile() file: UploadedImage | undefined,
   ): Promise<AssignmentDto> {
     return this.assignments.checkin(user.id, assignmentId, file);
+  }
+
+  @Patch('verify')
+  @ApiOperation({
+    summary: 'Bạn cùng phòng duyệt hoặc từ chối ca đã nộp (không tự duyệt ca của mình)',
+  })
+  @ApiOkResponse({ type: AssignmentDto })
+  @ApiBadRequestResponse({ description: 'Thiếu quyết định, hoặc REJECT không có lý do' })
+  @ApiConflictResponse({ description: 'Ca không ở trạng thái chờ duyệt, hoặc vừa được người khác duyệt' })
+  verify(
+    @CurrentUser() user: AuthUser,
+    @Param('assignmentId') assignmentId: string,
+    @Body() dto: VerifyAssignmentDto,
+  ): Promise<AssignmentDto> {
+    return this.assignments.verify(user.id, assignmentId, dto);
   }
 }

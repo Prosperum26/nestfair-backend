@@ -18,6 +18,7 @@ import type {
   AssignmentDto,
   ShuffleResultDto,
 } from './dto/assignment-response.dto.js';
+import type { VerifyAssignmentDto } from './dto/verify-assignment.dto.js';
 import { isValidWeekKey, weekKeyOf } from './week.js';
 
 @Injectable()
@@ -98,6 +99,51 @@ export class AssignmentsService {
       assignmentId: row.id,
       weekKey: row.weekKey,
       assigneeId: row.assigneeId,
+    });
+    return toAssignmentDto(row);
+  }
+
+  /** Thành viên khác (không phải người làm) duyệt: PENDING_VERIFY → DONE / REJECTED. */
+  async verify(
+    userId: string,
+    assignmentId: string,
+    dto: VerifyAssignmentDto,
+  ): Promise<AssignmentDto> {
+    const { assignment, membership } = await loadAssignmentForUser(
+      this.prisma,
+      userId,
+      assignmentId,
+    );
+    if (assignment.assigneeId === membership.id) {
+      throw new ForbiddenException('Bạn không thể tự duyệt ca của mình.');
+    }
+    if (assignment.status !== 'PENDING_VERIFY') {
+      throw new ConflictException('Ca này không ở trạng thái chờ duyệt.');
+    }
+
+    const approved = dto.decision === 'APPROVE';
+    // Điều kiện trạng thái trong WHERE: hai người duyệt cùng lúc thì chỉ một người ghi được.
+    const { count } = await this.prisma.choreAssignment.updateMany({
+      where: { id: assignment.id, status: 'PENDING_VERIFY' },
+      data: {
+        status: approved ? 'DONE' : 'REJECTED',
+        verifiedById: membership.id,
+        verifiedAt: new Date(),
+        rejectReason: approved ? null : (dto.reason ?? null),
+      },
+    });
+    if (count === 0) throw new ConflictException('Ca này vừa được duyệt rồi.');
+
+    const row = await this.prisma.choreAssignment.findUniqueOrThrow({
+      where: { id: assignment.id },
+      include: ASSIGNMENT_INCLUDE,
+    });
+    this.events.emitToHouse(row.houseId, 'chore:verified', {
+      assignmentId: row.id,
+      weekKey: row.weekKey,
+      assigneeId: row.assigneeId,
+      verifiedById: membership.id,
+      status: row.status,
     });
     return toAssignmentDto(row);
   }
