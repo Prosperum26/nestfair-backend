@@ -1,5 +1,5 @@
 import { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
+import { Test, type TestingModuleBuilder } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../../src/app.module.js';
@@ -12,11 +12,14 @@ export interface TestUser {
 }
 
 /** Khởi tạo app + helper tạo user/nhà cho e2e. `domain` để dọn dữ liệu cuối test. */
-export async function createFixture(domain: string) {
+export async function createFixture(
+  domain: string,
+  configure: (builder: TestingModuleBuilder) => TestingModuleBuilder = (b) => b,
+) {
   let seq = 0;
-  const moduleRef = await Test.createTestingModule({
-    imports: [AppModule],
-  }).compile();
+  const moduleRef = await configure(
+    Test.createTestingModule({ imports: [AppModule] }),
+  ).compile();
   const app: INestApplication<App> = moduleRef.createNestApplication();
   configureApp(app);
   await app.init();
