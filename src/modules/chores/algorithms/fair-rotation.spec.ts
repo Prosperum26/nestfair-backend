@@ -143,4 +143,29 @@ describe('generateWeekSchedule', () => {
     expect(() => generateWeekSchedule({ memberIds: [], chores: CHORES, history: [] })).toThrow('NO_MEMBERS');
     expect(() => generateWeekSchedule({ memberIds: MEMBERS, chores: [], history: [] })).toThrow('NO_CHORES');
   });
+
+  it('currentWeekIndex tường minh: tuần trống ở giữa không làm lịch sử bị tính nhầm là tuần liền trước', () => {
+    const res = generateWeekSchedule({
+      memberIds: ['solo'],
+      chores: [{ id: 'A', weight: 2 }],
+      history: [{ weekIndex: 0, choreId: 'A', memberId: 'solo' }],
+      currentWeekIndex: 5,
+      rng: seeded(1),
+    });
+    expect(res.windowUsed).toBe(3);
+    expect(res.relaxed).toBe(false);
+  });
+
+  it('extraLoad: người đã gánh sẵn nhiều thì nhận việc nhẹ hơn', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const res = generateWeekSchedule({
+        memberIds: ['m1', 'm2'],
+        chores: [{ id: 'heavy', weight: 3 }, { id: 'light', weight: 1 }],
+        history: [],
+        extraLoad: { m1: 5 },
+        rng: seeded(seed),
+      });
+      expect(res.assignments.find((a) => a.choreId === 'heavy')!.memberId).toBe('m2');
+    }
+  });
 });

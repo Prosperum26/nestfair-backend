@@ -14,6 +14,10 @@ export interface RotationInput {
   memberIds: string[];
   chores: RotationChore[];
   history: HistoryEntry[];
+  /** Chỉ số của tuần đang xếp. Mặc định: weekIndex lớn nhất trong history + 1. */
+  currentWeekIndex?: number;
+  /** Tải đã có sẵn trong tuần đang xếp (vd. ca đã nộp được giữ lại khi Shuffle). */
+  extraLoad?: Record<string, number>;
   rng?: () => number;
   maxAttempts?: number;
 }
@@ -61,9 +65,11 @@ export function generateWeekSchedule(input: RotationInput): RotationResult {
   if (chores.length === 0) throw new Error('NO_CHORES');
 
   const weightOf = new Map(chores.map((c) => [c.id, c.weight]));
-  const newWeek = history.reduce((max, h) => Math.max(max, h.weekIndex), -1) + 1;
+  const newWeek =
+    input.currentWeekIndex ??
+    history.reduce((max, h) => Math.max(max, h.weekIndex), -1) + 1;
 
-  const baseLoad = new Map(memberIds.map((m) => [m, 0]));
+  const baseLoad = new Map(memberIds.map((m) => [m, input.extraLoad?.[m] ?? 0]));
   for (const h of history) {
     if (baseLoad.has(h.memberId)) {
       baseLoad.set(h.memberId, baseLoad.get(h.memberId)! + (weightOf.get(h.choreId) ?? 0));
