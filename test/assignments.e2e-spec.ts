@@ -93,6 +93,7 @@ describe('Schedule & assignments API (e2e)', () => {
     const res = await preview(h.users[1].token, h.houseId, { weekKey: curKey }).expect(201);
     expect(typeof res.body.seed).toBe('number');
     expect(res.body.slots).toHaveLength(4);
+    expect(res.body.slots[0]).toMatchObject({ memberName: expect.any(String), memberUserId: expect.any(String), occurrenceDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
     expect(Array.isArray(res.body.reasons)).toBe(true);
     expect(await fx.prisma.weekSchedule.count({ where: { houseId: h.houseId } })).toBe(0);
     const far = await preview(h.users[0].token, h.houseId, { weekKey: weekKeyFromStart(addDays(cur, 21)) }).expect(422);

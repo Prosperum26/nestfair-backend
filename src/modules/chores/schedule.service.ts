@@ -23,7 +23,7 @@ export interface PreviewResult {
   relaxLevel: number;
   fenceWeeksApplied: number;
   reasons: string[];
-  slots: { choreId: string; choreTitle: string; occurrenceDate: DateStr; memberId: string | null }[];
+  slots: { choreId: string; choreTitle: string; occurrenceDate: DateStr; memberId: string | null; memberUserId: string | null; memberName: string | null }[];
 }
 
 const randomSeed = () => randomInt(1, 2 ** 31 - 1);
@@ -89,6 +89,11 @@ export class ScheduleService {
     const seed = randomSeed();
     const ctx = await buildGenContext(this.prisma, houseId, weekStart, seed);
     const res = generateWeek(ctx.input);
+    const people = await this.prisma.houseMember.findMany({
+      where: { houseId, leftAt: null },
+      select: { id: true, userId: true, user: { select: { fullName: true } } },
+    });
+    const byId = new Map(people.map((m) => [m.id, m]));
     return {
       seed,
       status: res.status,
@@ -101,6 +106,8 @@ export class ScheduleService {
         choreTitle: ctx.chores.get(s.choreId)!.title,
         occurrenceDate: s.occurrenceDate,
         memberId: s.memberId,
+        memberUserId: s.memberId ? (byId.get(s.memberId)?.userId ?? null) : null,
+        memberName: s.memberId ? (byId.get(s.memberId)?.user.fullName ?? null) : null,
       })),
     };
   }

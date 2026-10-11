@@ -18,8 +18,8 @@ export class OverrideAssignmentDto {
   @Length(5, 200, { message: 'Lý do cần từ 5 đến 200 ký tự.' })
   reason: string;
 
-  @ApiPropertyOptional({ format: 'uuid', description: 'HouseMember.id người nhận ca, bắt buộc khi REASSIGN' })
+  @ApiPropertyOptional({ format: 'uuid', description: 'User.id người nhận ca, bắt buộc khi REASSIGN' })
   @ValidateIf((o: OverrideAssignmentDto) => o.action === 'REASSIGN')
   @IsUUID(undefined, { message: 'Hãy chọn người nhận ca.' })
-  memberId?: string;
+  userId?: string;
 }

@@ -159,22 +159,21 @@ describe('Verify, appeal & override (e2e)', () => {
       expect(res.body).toMatchObject({ status: 'REJECTED', rejectReason: REASON, rejectCount: 1, disputed: false });
     });
 
-    it('REASSIGN giao ca cho người khác: TODO, nguồn REASSIGN, giữ originalAssigneeId; cần memberId hợp lệ', async () => {
+    it('REASSIGN giao ca cho người khác (theo userId): TODO, nguồn REASSIGN, giữ originalAssigneeId; cần userId hợp lệ', async () => {
       const { users, assignment, memberId } = await pending({ status: 'MISSED' });
       await override(users[0].token, assignment.id, { action: 'REASSIGN', reason: REASON }).expect(400);
       const outsider = await fx.user('Người lạ');
-      const outsiderMember = (await fx.prisma.houseMember.findFirst({ where: { userId: outsider.id } }))?.id ?? '00000000-0000-4000-8000-000000000000';
-      const bad = await override(users[0].token, assignment.id, { action: 'REASSIGN', reason: REASON, memberId: outsiderMember }).expect(400);
+      const bad = await override(users[0].token, assignment.id, { action: 'REASSIGN', reason: REASON, userId: outsider.id }).expect(400);
       expect(bad.body).toMatchObject({ code: 'NOT_ELIGIBLE_ASSIGNEE' });
 
-      const res = await override(users[0].token, assignment.id, { action: 'REASSIGN', reason: REASON, memberId: memberId(users[2]) }).expect(200);
-      expect(res.body).toMatchObject({ status: 'TODO', source: 'REASSIGN', assigneeId: memberId(users[2]), originalAssigneeId: memberId(users[1]), proofImageUrl: null });
+      const res = await override(users[0].token, assignment.id, { action: 'REASSIGN', reason: REASON, userId: users[2].id }).expect(200);
+      expect(res.body).toMatchObject({ status: 'TODO', source: 'REASSIGN', assigneeId: memberId(users[2]), assigneeUserId: users[2].id, originalAssigneeId: memberId(users[1]), proofImageUrl: null });
     });
 
     it('REASSIGN cho người đã rời nhà → 400 NOT_ELIGIBLE_ASSIGNEE', async () => {
       const { users, assignment, memberId } = await pending({ status: 'MISSED' });
       await fx.prisma.houseMember.update({ where: { id: memberId(users[2]) }, data: { leftAt: new Date() } });
-      await override(users[0].token, assignment.id, { action: 'REASSIGN', reason: REASON, memberId: memberId(users[2]) }).expect(400);
+      await override(users[0].token, assignment.id, { action: 'REASSIGN', reason: REASON, userId: users[2].id }).expect(400);
     });
 
     it('CANCEL hủy ca chưa xong; không hủy được ca đã DONE (409)', async () => {

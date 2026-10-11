@@ -69,6 +69,8 @@ export class PreviewSlotDto {
   @ApiProperty() choreTitle: string;
   @ApiProperty({ example: '2026-10-08' }) occurrenceDate: string;
   @ApiProperty({ type: String, nullable: true, description: 'HouseMember.id' }) memberId: string | null;
+  @ApiProperty({ type: String, nullable: true, description: 'User.id' }) memberUserId: string | null;
+  @ApiProperty({ type: String, nullable: true }) memberName: string | null;
 }
 
 export class PreviewResultDto {

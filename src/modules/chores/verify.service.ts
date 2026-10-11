@@ -116,7 +116,7 @@ export class VerifyService {
         };
         break;
       case 'REASSIGN': {
-        const target = await this.prisma.houseMember.findFirst({ where: { id: dto.memberId, houseId: assignment.houseId, leftAt: null }, select: { id: true } });
+        const target = await this.prisma.houseMember.findFirst({ where: { userId: dto.userId, houseId: assignment.houseId, leftAt: null }, select: { id: true } });
         if (!target) throw coded(HttpStatus.BAD_REQUEST, 'NOT_ELIGIBLE_ASSIGNEE', 'Người nhận ca không còn ở trong nhà.');
         data = {
           assigneeId: target.id,
@@ -148,7 +148,7 @@ export class VerifyService {
       assignment.houseId,
       membership.id,
       `OVERRIDE_${dto.action}`,
-      { from: assignment.status, to: row.status, reason: dto.reason, memberId: dto.memberId ?? null },
+      { from: assignment.status, to: row.status, reason: dto.reason, toUserId: dto.userId ?? null },
       { assignmentId: assignment.id },
     );
     const common = { assignmentId: row.id, weekKey: row.weekKey, assigneeId: row.assigneeId };
