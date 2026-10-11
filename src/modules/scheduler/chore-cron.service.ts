@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { ChoreScheduleService } from '../chores/chore-schedule.service.js';
-import { shiftWeek, weekKeyOf } from '../chores/week.js';
+import { ScheduleService } from '../chores/schedule.service.js';
+import { addDays, currentWeekStart } from '../chores/week.js';
 import { EventsService } from '../events/events.service.js';
 
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
@@ -13,59 +13,34 @@ export class ChoreCronService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly schedule: ChoreScheduleService,
+    private readonly schedule: ScheduleService,
     private readonly events: EventsService,
   ) {}
 
-  /** Nhà có ít nhất 1 việc đang bật và 1 thành viên còn ở. */
-  async listSchedulableHouseIds(): Promise<string[]> {
-    const houses = await this.prisma.house.findMany({
-      where: {
-        chores: { some: { isActive: true } },
-        members: { some: { leftAt: null } },
-      },
-      select: { id: true },
-    });
-    return houses.map((h) => h.id);
-  }
-
-  /**
-   * Chủ Nhật 20:00 giờ VN: tạo lịch tuần kế tiếp cho mọi nhà.
-   * Idempotent: nhà đã có lịch tuần đó thì bị bỏ qua (generateWeek AUTO).
-   */
+  /** Chủ Nhật 20:00 giờ nhà: sinh lịch tuần kế tiếp cho mọi nhà (nhà chưa có việc thì lịch EMPTY, không lỗi). */
   @Cron('0 20 * * 0', { timeZone: TIME_ZONE })
-  async generateNextWeek(
-    now: Date = new Date(),
-  ): Promise<{ houses: number; created: number }> {
-    const weekKey = shiftWeek(weekKeyOf(now), 1);
+  async generateNextWeek(now: Date = new Date(), houseIds?: string[]): Promise<{ houses: number; created: number }> {
+    const weekStart = addDays(currentWeekStart(now), 7);
+    const ids = houseIds ?? (await this.prisma.house.findMany({ select: { id: true } })).map((h) => h.id);
     let houses = 0;
     let created = 0;
-    for (const houseId of await this.listSchedulableHouseIds()) {
+    for (const houseId of ids) {
       try {
-        const res = await this.schedule.generateWeek(houseId, weekKey, 'AUTO');
+        const res = await this.schedule.ensureSchedule(houseId, weekStart, 'CRON', now);
         houses++;
-        created += res.created;
-        if (res.created > 0) {
+        if (res.created) {
+          created++;
           this.events.emitToHouse(houseId, 'chore:shuffled', {
-            weekKey,
-            relaxed: res.relaxed,
+            weekKey: res.schedule.weekKey,
+            relaxed: res.schedule.relaxed,
+            reasons: res.schedule.reasons,
           });
         }
       } catch (e) {
         // Một nhà lỗi không được chặn các nhà còn lại.
-        this.logger.error(`Tạo lịch ${weekKey} cho nhà ${houseId} thất bại`, e as Error);
+        this.logger.error(`Tạo lịch ${weekStart} cho nhà ${houseId} thất bại`, e as Error);
       }
     }
     return { houses, created };
-  }
-
-  /** Mỗi giờ: ca TODO / REJECTED đã quá hạn → MISSED. Ca đã nộp chờ duyệt thì giữ nguyên. */
-  @Cron('0 * * * *', { timeZone: TIME_ZONE })
-  async markMissed(now: Date = new Date()): Promise<number> {
-    const { count } = await this.prisma.choreAssignment.updateMany({
-      where: { status: { in: ['TODO', 'REJECTED'] }, dueAt: { lt: now } },
-      data: { status: 'MISSED' },
-    });
-    return count;
   }
 }

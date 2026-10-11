@@ -1,12 +1,14 @@
 import { vi } from 'vitest';
-import { ChoreScheduleService } from '../src/modules/chores/chore-schedule.service.js';
-import { shiftWeek, weekKeyOf, weekRange } from '../src/modules/chores/week.js';
+import { addDays, currentWeekStart, weekKeyFromStart } from '../src/modules/chores/week.js';
 import { EventsService } from '../src/modules/events/events.service.js';
 import { createFixture } from './support/house-fixture.js';
 
-describe('Assignments: list & shuffle (e2e)', () => {
+describe('Schedule & assignments API (e2e)', () => {
   let fx: Awaited<ReturnType<typeof createFixture>>;
-  const thisWeek = weekKeyOf(new Date());
+  const cur = currentWeekStart();
+  const next = addDays(cur, 7);
+  const curKey = weekKeyFromStart(cur);
+  const nextKey = weekKeyFromStart(next);
 
   beforeAll(async () => {
     fx = await createFixture('@e2e-assignments.nestfair.test');
@@ -14,130 +16,124 @@ describe('Assignments: list & shuffle (e2e)', () => {
   afterEach(() => vi.restoreAllMocks());
   afterAll(() => fx.cleanup());
 
-  async function setup(names: string[], weights: number[]) {
-    const house = await fx.houseWith(names);
-    const chores = [];
-    for (const [i, weight] of weights.entries()) {
-      chores.push(
-        await fx.prisma.chore.create({ data: { houseId: house.houseId, title: `Việc ${i + 1}`, weight } }),
-      );
+  async function house(names: string[], chores = 4) {
+    const h = await fx.houseWith(names);
+    for (let i = 0; i < chores; i++) {
+      await fx.prisma.chore.create({
+        data: { houseId: h.houseId, title: `Việc ${i + 1}`, weight: 2 + (i % 2), recurrenceDays: [7], dueTime: '21:00' },
+      });
     }
-    return { ...house, chores };
+    return h;
   }
-  const shuffle = (token: string, houseId: string, body: object = {}) =>
-    fx.as(token).post(`/api/v1/houses/${houseId}/assignments/shuffle`, body);
-  const list = (token: string, houseId: string, query = '') =>
-    fx.as(token).get(`/api/v1/houses/${houseId}/assignments${query}`);
+  const get = (token: string, houseId: string, q = '') => fx.as(token).get(`/api/v1/houses/${houseId}/assignments${q}`);
+  const shuffle = (token: string, houseId: string, body: object) => fx.as(token).post(`/api/v1/houses/${houseId}/assignments/shuffle`, body);
+  const preview = (token: string, houseId: string, body: object) => fx.as(token).post(`/api/v1/houses/${houseId}/schedules/preview`, body);
 
-  it('GET: tuần chưa có lịch trả mảng rỗng; người ngoài nhà 403; weekKey sai 400', async () => {
-    const { houseId, users } = await setup(['Hùng', 'Thiện'], [2]);
-    expect((await list(users[0].token, houseId).expect(200)).body).toEqual([]);
+  it('GET: week sai định dạng → 400; người ngoài nhà → 403', async () => {
+    const h = await house(['Hùng', 'Thiện']);
+    await get(h.users[0].token, h.houseId, '?week=abc').expect(400);
+    await get(h.users[0].token, h.houseId, '?week=2026-W54').expect(400);
     const outsider = await fx.user('Người lạ');
-    await list(outsider.token, houseId).expect(403);
-    await list(users[0].token, houseId, '?weekKey=abc').expect(400);
-    await list(users[0].token, houseId, '?weekKey=2026-W54').expect(400);
+    await get(outsider.token, h.houseId).expect(403);
   });
 
-  it('Shuffle: ROOMMATE 403; nhà chưa có việc 400', async () => {
-    const empty = await setup(['Hùng', 'Thiện'], []);
-    await shuffle(empty.users[0].token, empty.houseId).expect(400);
-    const { houseId, users } = await setup(['Hùng', 'Thiện'], [2]);
-    await shuffle(users[1].token, houseId).expect(403);
-  });
-
-  it('Shuffle: sinh đủ ca TODO cho tuần hiện tại, đúng hạn, emit chore:shuffled, GET khớp', async () => {
-    const { houseId, users, chores } = await setup(['Hùng', 'Thiện'], [2, 2, 3, 3]);
-    const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
-
-    const res = await shuffle(users[0].token, houseId).expect(201);
-    expect(res.body.relaxed).toBe(false);
+  it('GET tuần hiện tại chưa có lịch: sinh bù (CATCHUP) và trả { schedule, assignments }', async () => {
+    const h = await house(['Hùng', 'Thiện', 'Mai']);
+    const res = await get(h.users[1].token, h.houseId).expect(200);
+    expect(res.body.schedule).toMatchObject({
+      weekKey: curKey,
+      weekStart: cur,
+      status: 'LOCKED',
+      generatedBy: 'CATCHUP',
+      relaxed: false,
+      rerollCount: 0,
+    });
+    expect(typeof res.body.schedule.seed).toBe('number');
     expect(res.body.assignments).toHaveLength(4);
-    expect(res.body.assignments.map((a: { choreId: string }) => a.choreId).sort()).toEqual(
-      chores.map((c) => c.id).sort(),
-    );
-    for (const a of res.body.assignments) {
-      expect(a).toMatchObject({
-        weekKey: thisWeek,
-        status: 'TODO',
-        source: 'SHUFFLE',
-        dueAt: weekRange(thisWeek).dueAt.toISOString(),
-      });
-      expect(users.map((u) => u.id)).toContain(a.assigneeUserId);
-      // Chưa đổi ca nên người được giao ban đầu chính là người đang được giao.
-      expect(a.originalAssigneeId).toBe(a.assigneeId);
+    expect(res.body.assignments[0]).toMatchObject({
+      weekKey: curKey,
+      status: 'TODO',
+      source: 'ROTATION',
+      isLate: false,
+      rejectCount: 0,
+      disputed: false,
+      verifyMode: null,
+    });
+    expect(res.body.assignments[0].originalAssigneeId).toBe(res.body.assignments[0].assigneeId);
+    // Gọi lại không sinh thêm.
+    const again = await get(h.users[0].token, h.houseId).expect(200);
+    expect(again.body.schedule.id).toBe(res.body.schedule.id);
+    expect(again.body.assignments).toHaveLength(4);
+  });
+
+  it('GET nhà chưa có việc: lịch EMPTY NO_CHORES, không có ca', async () => {
+    const h = await house(['Hùng', 'Thiện'], 0);
+    const res = await get(h.users[0].token, h.houseId).expect(200);
+    expect(res.body.schedule).toMatchObject({ status: 'EMPTY', reasons: ['NO_CHORES'] });
+    expect(res.body.assignments).toEqual([]);
+  });
+
+  it('GET tuần quá khứ hoặc xa hơn 1 tuần: không sinh lịch, trả schedule null', async () => {
+    const h = await house(['Hùng', 'Thiện']);
+    for (const ws of [addDays(cur, -7), addDays(cur, 21)]) {
+      const res = await get(h.users[0].token, h.houseId, `?week=${weekKeyFromStart(ws)}`).expect(200);
+      expect(res.body).toEqual({ schedule: null, assignments: [] });
     }
-    expect(emit).toHaveBeenCalledWith(houseId, 'chore:shuffled', { weekKey: thisWeek, relaxed: false });
-
-    const got = await list(users[1].token, houseId).expect(200);
-    expect(got.body.map((a: { id: string }) => a.id).sort()).toEqual(
-      res.body.assignments.map((a: { id: string }) => a.id).sort(),
-    );
+    expect(await fx.prisma.weekSchedule.count({ where: { houseId: h.houseId } })).toBe(0);
   });
 
-  it('Shuffle lại: giữ nguyên ca đã DONE, chỉ xếp lại các ca TODO', async () => {
-    const { houseId, users } = await setup(['Hùng', 'Thiện'], [2, 3, 3]);
-    const first = await shuffle(users[0].token, houseId).expect(201);
-    const kept = first.body.assignments[0];
-    await fx.prisma.choreAssignment.update({ where: { id: kept.id }, data: { status: 'DONE' } });
-
-    const second = await shuffle(users[0].token, houseId).expect(201);
-    expect(second.body.assignments).toHaveLength(3);
-    const keptNow = second.body.assignments.find((a: { id: string }) => a.id === kept.id);
-    expect(keptNow).toMatchObject({ status: 'DONE', assigneeId: kept.assigneeId, choreId: kept.choreId });
+  it('GET tuần sau chưa bắt đầu có trạng thái PUBLISHED', async () => {
+    const h = await house(['Hùng', 'Thiện']);
+    const res = await get(h.users[0].token, h.houseId, `?week=${nextKey}`).expect(200);
+    expect(res.body.schedule.status).toBe('PUBLISHED');
   });
 
-  it('thành viên đã rời nhà không được xếp việc mới', async () => {
-    const { houseId, users, memberId } = await setup(['Hùng', 'Thiện', 'Mai'], [1, 1, 1, 1]);
-    await fx.prisma.houseMember.update({ where: { id: memberId(users[2]) }, data: { leftAt: new Date() } });
-    const res = await shuffle(users[0].token, houseId).expect(201);
-    const assignees = new Set(res.body.assignments.map((a: { assigneeUserId: string }) => a.assigneeUserId));
-    expect(assignees.has(users[2].id)).toBe(false);
+  it('preview: không ghi DB, trả seed + lý do; tuần ngoài phạm vi → 422', async () => {
+    const h = await house(['Hùng', 'Thiện']);
+    const res = await preview(h.users[1].token, h.houseId, { weekKey: curKey }).expect(201);
+    expect(typeof res.body.seed).toBe('number');
+    expect(res.body.slots).toHaveLength(4);
+    expect(Array.isArray(res.body.reasons)).toBe(true);
+    expect(await fx.prisma.weekSchedule.count({ where: { houseId: h.houseId } })).toBe(0);
+    const far = await preview(h.users[0].token, h.houseId, { weekKey: weekKeyFromStart(addDays(cur, 21)) }).expect(422);
+    expect(far.body).toMatchObject({ code: 'WEEK_OUT_OF_RANGE', statusCode: 422 });
   });
 
-  it('một thành viên, nhiều việc: tất cả về người đó', async () => {
-    const { houseId, users } = await setup(['Hùng'], [1, 2, 3]);
-    const res = await shuffle(users[0].token, houseId).expect(201);
-    expect(res.body.assignments).toHaveLength(3);
-    expect(new Set(res.body.assignments.map((a: { assigneeUserId: string }) => a.assigneeUserId))).toEqual(
-      new Set([users[0].id]),
-    );
+  it('CREATE: thành viên thường tạo được; lần 2 trả lịch cũ (changed:false), không lỗi', async () => {
+    const h = await house(['Hùng', 'Thiện']);
+    const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
+    const first = await shuffle(h.users[1].token, h.houseId, { weekKey: nextKey, mode: 'CREATE' }).expect(201);
+    expect(first.body.changed).toBe(true);
+    expect(first.body.assignments).toHaveLength(4);
+    expect(emit).toHaveBeenCalledWith(h.houseId, 'chore:shuffled', expect.objectContaining({ weekKey: nextKey, reasons: expect.any(Array) }));
+
+    emit.mockClear();
+    const second = await shuffle(h.users[0].token, h.houseId, { weekKey: nextKey, mode: 'CREATE' }).expect(201);
+    expect(second.body.changed).toBe(false);
+    expect(second.body.schedule.id).toBe(first.body.schedule.id);
+    expect(emit).not.toHaveBeenCalled();
   });
 
-  it('vô nghiệm rào 3 tuần thì nới và trả relaxed: true', async () => {
-    const { houseId, users, chores, memberId } = await setup(['Hùng'], [2]);
-    // Người duy nhất đã làm đúng việc đó ở 2 tuần liền trước.
-    for (const k of [1, 2]) {
-      const weekKey = shiftWeek(thisWeek, -k);
-      await fx.prisma.choreAssignment.create({
-        data: {
-          houseId,
-          choreId: chores[0].id,
-          assigneeId: memberId(users[0]),
-          originalAssigneeId: memberId(users[0]),
-          weekKey,
-          dueAt: weekRange(weekKey).dueAt,
-          source: 'AUTO',
-          status: 'DONE',
-        },
-      });
-    }
-    const res = await shuffle(users[0].token, houseId).expect(201);
-    expect(res.body.relaxed).toBe(true);
-    expect(res.body.assignments).toHaveLength(1);
+  it('REROLL: thành viên thường 403 ADMIN_ONLY; tuần hiện tại (đã khóa) 409 SCHEDULE_LOCKED; Admin tuần sau đổi được', async () => {
+    const h = await house(['Hùng', 'Thiện', 'Mai', 'Quân']);
+    await shuffle(h.users[0].token, h.houseId, { weekKey: nextKey, mode: 'CREATE' }).expect(201);
+
+    const denied = await shuffle(h.users[1].token, h.houseId, { weekKey: nextKey, mode: 'REROLL' }).expect(403);
+    expect(denied.body).toMatchObject({ code: 'ADMIN_ONLY' });
+
+    await get(h.users[0].token, h.houseId); // sinh bù tuần hiện tại
+    const locked = await shuffle(h.users[0].token, h.houseId, { weekKey: curKey, mode: 'REROLL' }).expect(409);
+    expect(locked.body).toMatchObject({ code: 'SCHEDULE_LOCKED' });
+
+    const ok = await shuffle(h.users[0].token, h.houseId, { weekKey: nextKey, mode: 'REROLL' }).expect(201);
+    expect(ok.body.changed).toBe(true);
+    expect(ok.body.schedule).toMatchObject({ rerollCount: 1, generatedBy: 'ADMIN_REROLL' });
   });
 
-  it('không cho xếp lại lịch của tuần đã qua', async () => {
-    const { houseId, users } = await setup(['Hùng', 'Thiện'], [2]);
-    await shuffle(users[0].token, houseId, { weekKey: shiftWeek(thisWeek, -1) }).expect(400);
-  });
-
-  it('generateWeek(AUTO) idempotent: gọi lần hai không tạo thêm', async () => {
-    const { houseId } = await setup(['Hùng', 'Thiện'], [2, 3]);
-    const svc = fx.app.get(ChoreScheduleService);
-    const nextWeek = shiftWeek(thisWeek, 1);
-    expect((await svc.generateWeek(houseId, nextWeek, 'AUTO')).created).toBe(2);
-    const again = await svc.generateWeek(houseId, nextWeek, 'AUTO');
-    expect(again.created).toBe(0);
-    expect(again.assignments).toHaveLength(2);
+  it('body shuffle sai: thiếu mode, mode lạ, weekKey sai → 400', async () => {
+    const h = await house(['Hùng', 'Thiện']);
+    await shuffle(h.users[0].token, h.houseId, { weekKey: curKey }).expect(400);
+    await shuffle(h.users[0].token, h.houseId, { weekKey: curKey, mode: 'NOPE' }).expect(400);
+    await shuffle(h.users[0].token, h.houseId, { weekKey: 'x', mode: 'CREATE' }).expect(400);
   });
 });
