@@ -63,6 +63,8 @@ describe('Assignments: list & shuffle (e2e)', () => {
         dueAt: weekRange(thisWeek).dueAt.toISOString(),
       });
       expect(users.map((u) => u.id)).toContain(a.assigneeUserId);
+      // Chưa đổi ca nên người được giao ban đầu chính là người đang được giao.
+      expect(a.originalAssigneeId).toBe(a.assigneeId);
     }
     expect(emit).toHaveBeenCalledWith(houseId, 'chore:shuffled', { weekKey: thisWeek, relaxed: false });
 
@@ -111,6 +113,7 @@ describe('Assignments: list & shuffle (e2e)', () => {
           houseId,
           choreId: chores[0].id,
           assigneeId: memberId(users[0]),
+          originalAssigneeId: memberId(users[0]),
           weekKey,
           dueAt: weekRange(weekKey).dueAt,
           source: 'AUTO',

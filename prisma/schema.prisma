@@ -93,6 +93,7 @@ model HouseMember {
 
   assignments         ChoreAssignment[] @relation("AssignmentAssignee")
   verifiedAssignments ChoreAssignment[] @relation("AssignmentVerifier")
+  originalAssignments ChoreAssignment[] @relation("AssignmentOriginalAssignee")
 
   @@index([houseId])
   @@index([userId])
@@ -139,28 +140,31 @@ model Chore {
 
 /// Một ca trực: một việc, một người, một tuần. `weekKey` dạng ISO "2026-W41".
 model ChoreAssignment {
-  id            String           @id @default(uuid()) @db.Uuid
-  houseId       String           @db.Uuid
-  choreId       String           @db.Uuid
+  id                 String           @id @default(uuid()) @db.Uuid
+  houseId            String           @db.Uuid
+  choreId            String           @db.Uuid
   /// HouseMember.id của người được giao.
-  assigneeId    String           @db.Uuid
-  weekKey       String
-  dueAt         DateTime
-  source        AssignmentSource
-  status        AssignmentStatus @default(TODO)
-  proofImageUrl String?
-  submittedAt   DateTime?
+  assigneeId         String           @db.Uuid
+  /// Người được giao lúc xếp lịch. Đổi ca sau này chỉ đổi assigneeId, cột này giữ nguyên.
+  originalAssigneeId String           @db.Uuid
+  weekKey            String
+  dueAt              DateTime
+  source             AssignmentSource
+  status             AssignmentStatus @default(TODO)
+  proofImageUrl      String?
+  submittedAt        DateTime?
   /// HouseMember.id của người duyệt (khác assignee).
-  verifiedById  String?          @db.Uuid
-  verifiedAt    DateTime?
-  rejectReason  String?
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  verifiedById       String?          @db.Uuid
+  verifiedAt         DateTime?
+  rejectReason       String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
-  house      House        @relation(fields: [houseId], references: [id], onDelete: Cascade)
-  chore      Chore        @relation(fields: [choreId], references: [id], onDelete: Cascade)
-  assignee   HouseMember  @relation("AssignmentAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
-  verifiedBy HouseMember? @relation("AssignmentVerifier", fields: [verifiedById], references: [id], onDelete: Restrict)
+  house            House        @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  chore            Chore        @relation(fields: [choreId], references: [id], onDelete: Cascade)
+  assignee         HouseMember  @relation("AssignmentAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  originalAssignee HouseMember  @relation("AssignmentOriginalAssignee", fields: [originalAssigneeId], references: [id], onDelete: Restrict)
+  verifiedBy       HouseMember? @relation("AssignmentVerifier", fields: [verifiedById], references: [id], onDelete: Restrict)
 
   @@unique([choreId, weekKey])
   @@index([houseId, weekKey])

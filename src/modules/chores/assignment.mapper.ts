@@ -22,6 +22,7 @@ export function toAssignmentDto(row: AssignmentRow): AssignmentDto {
     choreTitle: row.chore.title,
     weight: row.chore.weight,
     assigneeId: row.assigneeId,
+    originalAssigneeId: row.originalAssigneeId,
     assigneeUserId: row.assignee.userId,
     assigneeName: row.assignee.user.fullName,
     assigneeAvatarUrl: row.assignee.user.avatarUrl,

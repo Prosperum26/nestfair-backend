@@ -33,7 +33,7 @@ describe('Chore cron (e2e)', () => {
     const future = new Date(Date.now() + 3_600_000);
     const mk = (weekKey: string, status: 'TODO' | 'REJECTED' | 'PENDING_VERIFY' | 'DONE', dueAt: Date) =>
       fx.prisma.choreAssignment.create({
-        data: { houseId, choreId: chore.id, assigneeId: memberId(users[1]), weekKey, dueAt, status, source: 'AUTO' },
+        data: { houseId, choreId: chore.id, assigneeId: memberId(users[1]), originalAssigneeId: memberId(users[1]), weekKey, dueAt, status, source: 'AUTO' },
       });
     const todoPast = await mk('2026-W01', 'TODO', past);
     const rejectedPast = await mk('2026-W02', 'REJECTED', past);

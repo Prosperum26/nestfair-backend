@@ -11,6 +11,11 @@ export class AssignmentDto {
   @ApiProperty({ minimum: 1, maximum: 5 }) weight: number;
   @ApiProperty({ format: 'uuid', description: 'HouseMember.id của người được giao' })
   assigneeId: string;
+  @ApiProperty({
+    format: 'uuid',
+    description: 'HouseMember.id người được giao lúc xếp lịch (không đổi khi đổi ca)',
+  })
+  originalAssigneeId: string;
   @ApiProperty({ format: 'uuid', description: 'User.id của người được giao (khớp với danh sách thành viên)' })
   assigneeUserId: string;
   @ApiProperty() assigneeName: string;

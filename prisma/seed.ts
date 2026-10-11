@@ -110,6 +110,7 @@ async function seedChores(
       const data = {
         houseId,
         assigneeId,
+        originalAssigneeId: assigneeId,
         dueAt: weekRange(weekKey).dueAt,
         source: 'AUTO' as const,
         rejectReason: null,

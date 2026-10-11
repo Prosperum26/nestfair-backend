@@ -29,6 +29,7 @@ describe('Verify (e2e)', () => {
         houseId: house.houseId,
         choreId: chore.id,
         assigneeId: house.memberId(house.users[1]),
+        originalAssigneeId: house.memberId(house.users[1]),
         weekKey: '2026-W41',
         dueAt: new Date(Date.now() + 2 * 86_400_000),
         source: 'AUTO',

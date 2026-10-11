@@ -78,6 +78,7 @@ export class ChoreScheduleService {
             source,
             choreId: a.choreId,
             assigneeId: a.memberId,
+            originalAssigneeId: a.memberId,
           })),
         }),
       ]);
