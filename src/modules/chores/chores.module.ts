@@ -5,6 +5,8 @@ import { UploadsModule } from '../uploads/uploads.module.js';
 import { AssignmentActionsController } from './assignment-actions.controller.js';
 import { AssignmentsController } from './assignments.controller.js';
 import { AssignmentsService } from './assignments.service.js';
+import { CheckinService } from './checkin.service.js';
+import { VerifyService } from './verify.service.js';
 import { AuditService } from './audit.service.js';
 import { ScheduleService } from './schedule.service.js';
 import { ChoreSettingsController } from './chore-settings.controller.js';
@@ -20,7 +22,7 @@ import { ChoresService } from './chores.service.js';
     AssignmentActionsController,
     ChoreSettingsController,
   ],
-  providers: [ChoresService, ChoreSettingsService, AssignmentsService, ScheduleService, AuditService],
+  providers: [ChoresService, ChoreSettingsService, AssignmentsService, CheckinService, VerifyService, ScheduleService, AuditService],
   exports: [ScheduleService, AuditService],
 })
 export class ChoresModule {}

@@ -2,23 +2,20 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsIn, IsString, Length, ValidateIf } from 'class-validator';
 
-export const VERIFY_DECISIONS = ['APPROVE', 'REJECT'] as const;
+export const VERIFY_DECISIONS = ['APPROVED', 'REJECTED'] as const;
 export type VerifyDecision = (typeof VERIFY_DECISIONS)[number];
+
+const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
 export class VerifyAssignmentDto {
   @ApiProperty({ enum: VERIFY_DECISIONS })
-  @IsIn(VERIFY_DECISIONS, { message: 'Quyết định phải là APPROVE hoặc REJECT.' })
+  @IsIn(VERIFY_DECISIONS, { message: 'Quyết định phải là APPROVED hoặc REJECTED.' })
   decision: VerifyDecision;
 
-  @ApiPropertyOptional({
-    maxLength: 200,
-    description: 'Bắt buộc khi REJECT, hiện cho người làm biết cần sửa gì',
-  })
-  @ValidateIf((o: VerifyAssignmentDto) => o.decision === 'REJECT')
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim() : value,
-  )
+  @ApiPropertyOptional({ minLength: 5, maxLength: 200, description: 'Bắt buộc khi REJECTED, hiện cho người làm biết cần sửa gì' })
+  @ValidateIf((o: VerifyAssignmentDto) => o.decision === 'REJECTED')
+  @Transform(trim)
   @IsString({ message: 'Hãy nhập lý do từ chối.' })
-  @Length(1, 200, { message: 'Lý do từ chối cần từ 1 đến 200 ký tự.' })
+  @Length(5, 200, { message: 'Lý do từ chối cần từ 5 đến 200 ký tự.' })
   reason?: string;
 }
