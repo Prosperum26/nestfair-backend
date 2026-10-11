@@ -7,6 +7,8 @@ import { AssignmentsController } from './assignments.controller.js';
 import { AssignmentsService } from './assignments.service.js';
 import { AuditService } from './audit.service.js';
 import { ScheduleService } from './schedule.service.js';
+import { ChoreSettingsController } from './chore-settings.controller.js';
+import { ChoreSettingsService } from './chore-settings.service.js';
 import { ChoresController } from './chores.controller.js';
 import { ChoresService } from './chores.service.js';
 
@@ -16,8 +18,9 @@ import { ChoresService } from './chores.service.js';
     ChoresController,
     AssignmentsController,
     AssignmentActionsController,
+    ChoreSettingsController,
   ],
-  providers: [ChoresService, AssignmentsService, ScheduleService, AuditService],
+  providers: [ChoresService, ChoreSettingsService, AssignmentsService, ScheduleService, AuditService],
   exports: [ScheduleService, AuditService],
 })
 export class ChoresModule {}

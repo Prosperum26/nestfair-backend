@@ -68,7 +68,7 @@ export class ChoresController {
     @CurrentMembership() m: HouseMembership,
     @Body() dto: CreateChoreDto,
   ): Promise<ChoreDto> {
-    return this.chores.create(m.houseId, dto);
+    return this.chores.create(m.houseId, m.id, dto);
   }
 
   @Patch(':choreId')
@@ -82,6 +82,6 @@ export class ChoresController {
     @Param('choreId', ParseUUIDPipe) choreId: string,
     @Body() dto: UpdateChoreDto,
   ): Promise<ChoreDto> {
-    return this.chores.update(m.houseId, choreId, dto);
+    return this.chores.update(m.houseId, m.id, choreId, dto);
   }
 }
