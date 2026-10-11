@@ -2,7 +2,13 @@ import { Injectable } from '@nestjs/common';
 import type { Server } from 'socket.io';
 
 /** Tên event realtime của module việc nhà (AGENTS.md mục 5). */
-export type ChoreEvent = 'chore:submitted' | 'chore:verified' | 'chore:shuffled';
+export type ChoreEvent =
+  | 'chore:submitted'
+  | 'chore:verified'
+  | 'chore:shuffled'
+  | 'chore:missed'
+  | 'chore:reassigned'
+  | 'chore:cancelled';
 export type RealtimeEvent = ChoreEvent | 'reminder:due';
 
 export const houseRoom = (houseId: string) => `house:${houseId}`;
