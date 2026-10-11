@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { validateEnv } from './config/env.validation.js';
@@ -22,6 +23,11 @@ import { PrismaModule } from './prisma/prisma.module.js';
     ChoresModule,
     EventsModule,
     ScheduleModule.forRoot(),
+    // Giới hạn tần suất cho check-in / duyệt / khiếu nại (ThrottlerGuard gắn riêng trên các route đó). Bỏ qua khi test.
+    ThrottlerModule.forRoot({
+      throttlers: [{ name: 'default', ttl: 60_000, limit: 20 }],
+      skipIf: () => process.env.NODE_ENV === 'test',
+    }),
     SchedulerModule,
   ],
   controllers: [AppController],

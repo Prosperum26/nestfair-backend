@@ -41,9 +41,9 @@ src/
     ├── auth/           đăng ký, đăng nhập, refresh token, Google OAuth, JwtAuthGuard, @CurrentUser
     ├── users/          hồ sơ + tài khoản nhận tiền (ngân hàng + STK)
     ├── houses/         nhà, mã mời, thành viên; HouseMemberGuard, HouseRolesGuard, @CurrentMembership
-    ├── chores/         việc nhà, xoay vòng công bằng (algorithms/), check-in ảnh, duyệt chéo
+    ├── chores/         việc nhà: lịch xoay vòng công bằng (algorithms/), check-in ảnh, duyệt chéo, vắng mặt, nghỉ nhà, nhật ký
     ├── events/         Socket.IO gateway, EventsService (room house:<id>, user:<id>)
-    ├── scheduler/      cron: tạo lịch tuần mới (CN 20:00), đánh dấu MISSED (mỗi giờ), múi giờ VN
+    ├── scheduler/      cron: tạo lịch tuần mới, quá hạn, tự duyệt, dọn ảnh, khóa tuần (xem mục Việc nhà)
     └── uploads/        CloudinaryService + kiểm tra ảnh (jpeg/png/webp, 5MB)
 test/                   e2e
 ```
@@ -110,3 +110,50 @@ Mật khẩu chung: `NestFair123`. Mã mời Nhà 12A: `K7M2QZ` (seed đặt l�
 ### Bật upload ảnh (Cloudinary)
 
 Check-in việc nhà cần ảnh minh chứng. Điền `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` vào `.env` (lấy ở Cloudinary Dashboard). Chưa điền thì `POST /assignments/:id/checkin` trả `503`.
+
+## Việc nhà (Issue #4 v2)
+
+Đặc tả: lịch theo **ngày**, hai chế độ xoay, rào nới dần, check-in có cửa sổ và ân hạn, duyệt chéo, vắng mặt / nghỉ cả nhà.
+
+**Khái niệm.** Một *ca* (`ChoreAssignment`) = một việc vào một ngày. Tuần ISO thứ Hai → Chủ Nhật theo giờ `Asia/Ho_Chi_Minh`;
+mỗi (nhà, tuần) có đúng một `WeekSchedule` (`UNIQUE(houseId, weekStart)`, kèm `seed` để tái lập lịch).
+
+- `WEEK_BLOCK`: một người sở hữu việc cả tuần. Rào `W_eff = min(3, số người)`: không làm lại cùng việc trong `W_eff − 1` tuần **có lịch** liền trước.
+- `PER_OCCURRENCE`: mỗi lần một người, xoay bằng khối hoán vị Fisher-Yates, không ai làm hai lần liên tiếp (kể cả qua tuần).
+- Vô nghiệm thì nới rào dần (`relaxed` + lý do `FEW_OPTIONS`); lý do khác: `SOLO_HOUSE`, `SMALL_HOUSE`, `MEMBER_ABSENT`, `NEW_MEMBER`, `PINNED_OVERRIDE`, `NO_CHORES`, `NO_ELIGIBLE_MEMBERS`, `HOUSE_BREAK`, `DAILY_CAP_EXCEEDED`.
+
+**API chính** (prefix `/api/v1`, Swagger ở `/api/docs`):
+
+| Method | Endpoint | Ghi chú |
+| :-- | :-- | :-- |
+| GET | `/houses/:id/assignments?week=2026-W41` | `{ schedule, assignments }`; tuần hiện tại/kế tiếp chưa có lịch thì sinh bù |
+| POST | `/houses/:id/schedules/preview` | xem trước (dry-run), trả `seed` |
+| POST | `/houses/:id/assignments/shuffle` | `{ weekKey, mode: CREATE \| REROLL }`; REROLL chỉ Admin, ≤ 2 lần, trước khi tuần bắt đầu |
+| GET/POST/PATCH | `/houses/:id/chores` | `frequency`, `recurrenceDays`, `dueTime`, `rotationMode`, `occurrenceGap` |
+| GET/PATCH | `/houses/:id/chore-settings` | ân hạn nộp muộn (giờ), số ca tối đa / người / ngày |
+| POST | `/assignments/:id/checkin` | multipart `photo`, header `Idempotency-Key` |
+| PATCH | `/assignments/:id/verify` | `{ decision: APPROVED \| REJECTED, reason? }` |
+| POST | `/assignments/:id/appeal` | khiếu nại ca bị từ chối |
+| PATCH | `/assignments/:id/override` | Admin: `FORCE_DONE`, `FORCE_REJECT`, `REASSIGN`, `CANCEL` |
+| GET/POST/DELETE | `/houses/:id/absences`, `/houses/:id/breaks` | khai vắng / cả nhà vắng |
+| GET | `/houses/:id/chore-audit?week=` | nhật ký thao tác |
+
+**Lỗi.** Giữ format NestJS `{ statusCode, message, error }` và thêm `code`: `WEEK_OUT_OF_RANGE`, `SCHEDULE_LOCKED`, `SCHEDULE_HAS_ACTIVITY`, `REROLL_LIMIT`,
+`ASSIGNMENT_STATE_CHANGED`, `PROOF_DUPLICATE`, `ASSIGNMENT_DISPUTED`, `NOT_ASSIGNEE`, `SELF_VERIFY_FORBIDDEN`, `ADMIN_ONLY`, `CHECKIN_NOT_OPEN`,
+`CHECKIN_WINDOW_CLOSED`, `UNSUPPORTED_IMAGE` (415), `IMAGE_TOO_LARGE` (413), `UPLOAD_UNAVAILABLE` (503), `INVALID_DATE_RANGE`, `NOT_ELIGIBLE_ASSIGNEE`.
+
+**Cron** (múi giờ `Asia/Ho_Chi_Minh`, an toàn nhiều instance, tắt khi `NODE_ENV=test`):
+
+| Job | Lịch | Việc làm |
+| :-- | :-- | :-- |
+| `generateNextWeek` | CN 20:00 | tạo lịch tuần kế tiếp cho mọi nhà |
+| `markMissed` | 5 phút | ca `TODO/REJECTED` quá `dueAt` + ân hạn của nhà → `MISSED` |
+| `autoApprove` | 15 phút | `PENDING_VERIFY` quá 48 giờ → `DONE` (`AUTO_APPROVED`) |
+| `reassignOrphans` | 10 phút | giao lại ca của người đã rời nhà |
+| `cleanupProofs` | 03:00 | xóa ảnh minh chứng của ca `DONE` quá 60 ngày |
+| `lockStartedWeeks` | 00:05 | `PUBLISHED` → `LOCKED` khi tuần đã bắt đầu |
+
+Khi server khởi động cũng sinh bù lịch cho mọi nhà (cron có thể bị lỡ lúc server ngủ). Check-in / duyệt / khiếu nại giới hạn 20 lần / phút (`@nestjs/throttler`, bỏ qua khi test; đặt sau proxy thì cần cấu hình `trust proxy` để lấy đúng IP).
+
+**Giới hạn đã biết.** Mỗi ca một người; chỉ lặp theo tuần; không chặn việc Admin tạo bản sao việc để né rào (chỉ có nhật ký); chống gian lận ảnh ở mức băm trùng + duyệt chéo;
+chưa có "Xếp bổ sung" giữa tuần và duyệt khai vắng dài ngày.

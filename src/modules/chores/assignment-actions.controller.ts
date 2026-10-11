@@ -12,6 +12,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -27,6 +28,7 @@ import {
   ApiServiceUnavailableResponse,
   ApiTags,
   ApiUnauthorizedResponse,
+  ApiTooManyRequestsResponse,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -48,8 +50,9 @@ const HARD_LIMIT_BYTES = 10 * 1024 * 1024;
 @ApiUnauthorizedResponse()
 @ApiForbiddenResponse({ description: 'Không phải ca của bạn / không đủ quyền / đã rời nhà' })
 @ApiNotFoundResponse({ description: 'Không tìm thấy ca trực (hoặc ca của nhà khác)' })
+@ApiTooManyRequestsResponse({ description: 'Thao tác quá nhanh (tối đa 20 lần / phút)' })
 @ApiParam({ name: 'assignmentId', format: 'uuid' })
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottlerGuard)
 @Controller('assignments/:assignmentId')
 export class AssignmentActionsController {
   constructor(

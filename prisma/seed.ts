@@ -9,7 +9,10 @@ import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '../src/generated/prisma/client.js';
-import { shiftWeek, weekKeyOf, weekRange } from '../src/modules/chores/week.js';
+import { generateWeek } from '../src/modules/chores/algorithms/schedule-generator.js';
+import { buildGenContext } from '../src/modules/chores/schedule-context.js';
+import { createScheduleRows } from '../src/modules/chores/schedule-store.js';
+import { addDays, currentWeekStart, toDateStr } from '../src/modules/chores/week.js';
 
 const PASSWORD = 'NestFair123';
 const INVITE_CODE = 'K7M2QZ';
@@ -55,74 +58,104 @@ const prisma = new PrismaClient({
 });
 
 const CHORES = [
-  { title: 'Đổ rác', weight: 2 },
-  { title: 'Rửa chén', weight: 2 },
-  { title: 'Lau nhà', weight: 3 },
-  { title: 'Dọn nhà tắm', weight: 3 },
+  { title: 'Rửa chén buổi tối', weight: 2, frequency: 'DAILY', recurrenceDays: [1, 2, 3, 4, 5, 6, 7], dueTime: '21:00', rotationMode: 'PER_OCCURRENCE' },
+  { title: 'Đổ rác', weight: 2, frequency: 'WEEKLY', recurrenceDays: [1, 4], dueTime: '21:00', rotationMode: 'WEEK_BLOCK' },
+  { title: 'Lau bếp', weight: 2, frequency: 'WEEKLY', recurrenceDays: [1], dueTime: '20:00', rotationMode: 'WEEK_BLOCK' },
+  { title: 'Tưới cây ban công', weight: 1, frequency: 'WEEKLY', recurrenceDays: [2, 5], dueTime: '18:00', rotationMode: 'WEEK_BLOCK' },
+  { title: 'Lau nhà', weight: 3, frequency: 'WEEKLY', recurrenceDays: [6], dueTime: '18:00', rotationMode: 'WEEK_BLOCK' },
+  { title: 'Dọn nhà tắm', weight: 3, frequency: 'WEEKLY', recurrenceDays: [7], dueTime: '18:00', rotationMode: 'WEEK_BLOCK' },
 ] as const;
 
-const SAMPLE_PROOF_URL =
-  'https://res.cloudinary.com/demo/image/upload/sample.jpg';
+const SAMPLE_PROOF_URL = 'https://res.cloudinary.com/demo/image/upload/sample.jpg';
 
 /**
- * Việc nhà: 3 tuần lịch sử đã DONE + tuần hiện tại (3 ca TODO, 1 ca của Thiện đang chờ duyệt).
- * Xoay vòng kiểu bảng Latin nên không ai lặp lại một việc trong 4 tuần liên tiếp
- * (đủ để demo rào 3 tuần). Chạy lại thì đặt lại trạng thái demo.
+ * Việc nhà theo Design.md mục 7: 6 việc, 4 người. Dùng chính thuật toán sinh lịch (seed cố định) cho
+ * 3 tuần lịch sử (đã xong, có 1 ca MISSED), tuần này (có ca chờ duyệt, bị từ chối và bỏ ca để demo) và tuần sau
+ * (đã công bố, chưa bắt đầu, còn xáo lại được). Xóa và tạo lại dữ liệu việc nhà của nhà demo mỗi lần chạy.
  */
-async function seedChores(
-  houseId: string,
-  users: Record<string, { id: string }>,
-) {
+async function seedChores(houseId: string, users: Record<string, { id: string }>) {
   const memberIds: string[] = [];
   for (const { key } of MEMBERS) {
-    const m = await prisma.houseMember.findFirstOrThrow({
-      where: { houseId, userId: users[key].id, leftAt: null },
-      select: { id: true },
-    });
+    const m = await prisma.houseMember.findFirstOrThrow({ where: { houseId, userId: users[key].id, leftAt: null }, select: { id: true } });
     memberIds.push(m.id);
   }
+  const [hung, thien, mai, quan] = memberIds;
 
-  const chores = [];
-  for (const c of CHORES) {
-    const found = await prisma.chore.findFirst({
-      where: { houseId, title: c.title },
-    });
-    chores.push(
-      found
-        ? await prisma.chore.update({ where: { id: found.id }, data: { ...c, isActive: true } })
-        : await prisma.chore.create({ data: { houseId, ...c } }),
-    );
-  }
+  await prisma.choreAuditLog.deleteMany({ where: { houseId } });
+  await prisma.memberAbsence.deleteMany({ where: { houseId } });
+  await prisma.houseBreak.deleteMany({ where: { houseId } });
+  await prisma.choreAssignment.deleteMany({ where: { houseId } });
+  await prisma.weekSchedule.deleteMany({ where: { houseId } });
+  await prisma.chore.deleteMany({ where: { houseId } });
+  for (const c of CHORES) await prisma.chore.create({ data: { houseId, ...c, recurrenceDays: [...c.recurrenceDays] } });
 
-  const thisWeek = weekKeyOf(new Date());
-  for (const [offset, back] of [3, 2, 1, 0].entries()) {
-    const weekKey = shiftWeek(thisWeek, -back);
-    const isCurrent = back === 0;
-    for (const [j, chore] of chores.entries()) {
-      const assigneeId = memberIds[(j + offset) % memberIds.length];
-      const verifier = memberIds[(j + offset + 1) % memberIds.length];
-      const pending = isCurrent && assigneeId === memberIds[1];
-      const state = isCurrent
-        ? pending
-          ? ({ status: 'PENDING_VERIFY', proofImageUrl: SAMPLE_PROOF_URL, submittedAt: new Date(), verifiedById: null, verifiedAt: null } as const)
-          : ({ status: 'TODO', proofImageUrl: null, submittedAt: null, verifiedById: null, verifiedAt: null } as const)
-        : ({ status: 'DONE', proofImageUrl: SAMPLE_PROOF_URL, submittedAt: weekRange(weekKey).start, verifiedById: verifier, verifiedAt: weekRange(weekKey).start } as const);
-      const data = {
-        houseId,
-        assigneeId,
-        originalAssigneeId: assigneeId,
-        dueAt: weekRange(weekKey).dueAt,
-        source: 'AUTO' as const,
-        rejectReason: null,
-        ...state,
-      };
-      await prisma.choreAssignment.upsert({
-        where: { choreId_weekKey: { choreId: chore.id, weekKey } },
-        update: data,
-        create: { choreId: chore.id, weekKey, ...data },
+  const today = toDateStr(new Date());
+  const thisWeek = currentWeekStart();
+  const verifierOf = (assigneeId: string) => memberIds[(memberIds.indexOf(assigneeId) + 1) % memberIds.length];
+
+  for (const offset of [-3, -2, -1, 0, 1]) {
+    const weekStart = addDays(thisWeek, offset * 7);
+    const seed = 4200 + offset;
+    const ctx = await buildGenContext(prisma, houseId, weekStart, seed);
+    const res = generateWeek(ctx.input);
+    const schedule = await createScheduleRows(prisma, houseId, weekStart, 'CRON', seed, ctx, res, offset <= 0 ? 'LOCKED' : 'PUBLISHED');
+    if (offset >= 1) continue;
+
+    const rows = await prisma.choreAssignment.findMany({ where: { scheduleId: schedule.id }, orderBy: [{ occurrenceDate: 'asc' }, { dueAt: 'asc' }] });
+    const done = (a: (typeof rows)[number]) =>
+      prisma.choreAssignment.update({
+        where: { id: a.id },
+        data: {
+          status: 'DONE',
+          proofImageUrl: SAMPLE_PROOF_URL,
+          proofHash: `seed-${a.id}`,
+          submittedAt: new Date(a.dueAt.getTime() - 3_600_000),
+          verifiedById: verifierOf(a.assigneeId!),
+          verifiedAt: new Date(a.dueAt.getTime() - 1_800_000),
+          verifyMode: 'PEER',
+        },
       });
+
+    // Ca "demo" của tuần này: lấy ca sớm nhất của từng người.
+    const firstOf = (memberId: string) => rows.find((r) => r.assigneeId === memberId);
+    const demo = new Map<string, 'PENDING_VERIFY' | 'REJECTED' | 'MISSED'>();
+    if (offset === 0) {
+      for (const [m, st] of [[thien, 'PENDING_VERIFY'], [mai, 'REJECTED'], [quan, 'MISSED']] as const) {
+        const r = firstOf(m);
+        if (r) demo.set(r.id, st);
+      }
+    } else if (offset === -1) {
+      const r = firstOf(quan);
+      if (r) demo.set(r.id, 'MISSED');
+    }
+
+    for (const a of rows) {
+      const special = demo.get(a.id);
+      if (special === 'MISSED') await prisma.choreAssignment.update({ where: { id: a.id }, data: { status: 'MISSED' } });
+      else if (special === 'PENDING_VERIFY') {
+        await prisma.choreAssignment.update({
+          where: { id: a.id },
+          data: { status: 'PENDING_VERIFY', proofImageUrl: SAMPLE_PROOF_URL, proofHash: `seed-${a.id}`, submittedAt: new Date() },
+        });
+      } else if (special === 'REJECTED') {
+        await prisma.choreAssignment.update({
+          where: { id: a.id },
+          data: {
+            status: 'REJECTED',
+            proofImageUrl: SAMPLE_PROOF_URL,
+            proofHash: `seed-${a.id}`,
+            submittedAt: new Date(),
+            rejectReason: 'Ảnh bị mờ, chưa thấy sàn đã lau',
+            rejectCount: 1,
+            verifiedById: verifierOf(a.assigneeId!),
+            verifiedAt: new Date(),
+            verifyMode: 'PEER',
+          },
+        });
+      } else if (offset < 0 || toDateStr(a.occurrenceDate) < today) await done(a);
     }
   }
+  void hung;
 }
 
 async function main() {

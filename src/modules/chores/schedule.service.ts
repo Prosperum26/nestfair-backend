@@ -5,11 +5,12 @@ import type { WeekSchedule } from '../../generated/prisma/client.js';
 import type { GeneratedBy, HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { EventsService } from '../events/events.service.js';
-import { ALGO_VERSION, generateWeek, type GenResult, type GenSlot } from './algorithms/schedule-generator.js';
+import { generateWeek, type GenResult } from './algorithms/schedule-generator.js';
 import { rollingLoad } from './algorithms/load.js';
 import { AuditService } from './audit.service.js';
-import { buildGenContext, dateOf, type Db, dsOf, type GenContext } from './schedule-context.js';
-import { addDays, currentWeekStart, type DateStr, dueAtOf, toDateStr, weekKeyFromStart } from './week.js';
+import { buildGenContext, dateOf, type Db, dsOf } from './schedule-context.js';
+import { createScheduleRows, scheduleFields, storeSlots } from './schedule-store.js';
+import { addDays, currentWeekStart, type DateStr, toDateStr } from './week.js';
 
 export const MAX_REROLLS = 2;
 const REROLL_TRIES = 20;
@@ -141,12 +142,12 @@ export class ScheduleService {
       const updated = await tx.weekSchedule.update({
         where: { id: sched.id },
         data: {
-          ...this.scheduleFields(accepted.res, accepted.seed),
+          ...scheduleFields(accepted.res, accepted.seed),
           generatedBy: 'ADMIN_REROLL',
           rerollCount: sched.rerollCount + 1,
         },
       });
-      await this.insertSlots(tx, houseId, updated, ctx, accepted.res.slots);
+      await storeSlots(tx, houseId, updated, ctx, accepted.res.slots);
       await this.audit.log(houseId, actor.memberId, 'REROLL', { weekKey: updated.weekKey, oldSeed: sched.seed, newSeed: accepted.seed }, { scheduleId: sched.id }, tx);
       return { changed: true, schedule: updated };
     });
@@ -266,59 +267,11 @@ export class ScheduleService {
 
   // ---- nội bộ ----
 
-  private scheduleFields(res: GenResult, seed: number) {
-    return {
-      seed,
-      attempts: res.attempts,
-      fenceWeeksApplied: res.fenceWeeksApplied,
-      relaxLevel: res.relaxLevel,
-      relaxed: res.relaxed,
-      reasons: res.reasons,
-      loadSnapshot: { after: res.loadAfter },
-      algoVersion: ALGO_VERSION,
-    };
-  }
-
   private async generateAndStore(tx: Db, houseId: string, weekStart: DateStr, by: GeneratedBy, seed: number, now: Date): Promise<WeekSchedule> {
     const ctx = await buildGenContext(tx, houseId, weekStart, seed);
     const res = generateWeek(ctx.input);
     const started = weekStart <= toDateStr(now);
-    const schedule = await tx.weekSchedule.create({
-      data: {
-        houseId,
-        weekStart: dateOf(weekStart),
-        weekKey: weekKeyFromStart(weekStart),
-        status: res.status === 'EMPTY' ? 'EMPTY' : started ? 'LOCKED' : 'PUBLISHED',
-        generatedBy: by,
-        ...this.scheduleFields(res, seed),
-      },
-    });
-    await this.insertSlots(tx, houseId, schedule, ctx, res.slots);
-    return schedule;
-  }
-
-  private async insertSlots(tx: Db, houseId: string, schedule: WeekSchedule, ctx: GenContext, slots: GenSlot[]) {
-    if (slots.length === 0) return;
-    await tx.choreAssignment.createMany({
-      data: slots.map((s) => {
-        const chore = ctx.chores.get(s.choreId)!;
-        return {
-          houseId,
-          scheduleId: schedule.id,
-          choreId: s.choreId,
-          assigneeId: s.memberId,
-          originalAssigneeId: s.memberId,
-          weekKey: schedule.weekKey,
-          weekStart: schedule.weekStart,
-          occurrenceDate: dateOf(s.occurrenceDate),
-          slotIndex: s.slotIndex,
-          dueAt: dueAtOf(s.occurrenceDate, chore.dueTime),
-          titleSnapshot: chore.title,
-          weightSnapshot: chore.weight,
-          source: s.source,
-          status: s.memberId ? ('TODO' as const) : ('UNASSIGNED' as const),
-        };
-      }),
-    });
+    const status = res.status === 'EMPTY' ? 'EMPTY' : started ? 'LOCKED' : 'PUBLISHED';
+    return createScheduleRows(tx, houseId, weekStart, by, seed, ctx, res, status);
   }
 }
