@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { HousesModule } from '../houses/houses.module.js';
 import { UploadsModule } from '../uploads/uploads.module.js';
+import { AbsencesController, BreaksController, ChoreAuditController } from './absences.controller.js';
+import { AbsencesService } from './absences.service.js';
+import { BreaksService } from './breaks.service.js';
 import { AssignmentActionsController } from './assignment-actions.controller.js';
 import { AssignmentsController } from './assignments.controller.js';
 import { AssignmentsService } from './assignments.service.js';
@@ -21,8 +24,11 @@ import { ChoresService } from './chores.service.js';
     AssignmentsController,
     AssignmentActionsController,
     ChoreSettingsController,
+    AbsencesController,
+    BreaksController,
+    ChoreAuditController,
   ],
-  providers: [ChoresService, ChoreSettingsService, AssignmentsService, CheckinService, VerifyService, ScheduleService, AuditService],
+  providers: [ChoresService, ChoreSettingsService, AssignmentsService, CheckinService, VerifyService, ScheduleService, AuditService, AbsencesService, BreaksService],
   exports: [ScheduleService, AuditService],
 })
 export class ChoresModule {}

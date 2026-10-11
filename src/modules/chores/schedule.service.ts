@@ -183,13 +183,48 @@ export class ScheduleService {
       where: { houseId, status: 'TODO', dueAt: { gt: now }, assignee: { leftAt: { not: null } } },
       orderBy: [{ occurrenceDate: 'asc' }, { choreId: 'asc' }],
     });
-    if (orphans.length === 0) return { moved: 0, unassigned: 0 };
+    return this.reassignSlots(houseId, orphans, 'ORPHAN');
+  }
+
+  /**
+   * S-20: khai vắng sau khi lịch đã công bố → các ca TODO của người đó trong khoảng vắng còn ≥ 24h được dời cho người
+   * tải thấp nhất (không phát sinh nợ ca); ca còn < 24h giữ nguyên, phải dùng luồng đổi ca (Issue #7).
+   */
+  async moveSlotsForAbsence(
+    houseId: string,
+    userId: string,
+    startDate: DateStr,
+    endDate: DateStr,
+    now: Date = new Date(),
+  ): Promise<{ moved: number; unassigned: number }> {
+    const member = await this.prisma.houseMember.findFirst({ where: { houseId, userId, leftAt: null }, select: { id: true } });
+    if (!member) return { moved: 0, unassigned: 0 };
+    const rows = await this.prisma.choreAssignment.findMany({
+      where: {
+        houseId,
+        assigneeId: member.id,
+        status: 'TODO',
+        occurrenceDate: { gte: dateOf(startDate), lte: dateOf(endDate) },
+        dueAt: { gte: new Date(now.getTime() + 24 * 3_600_000) },
+      },
+      orderBy: [{ occurrenceDate: 'asc' }, { choreId: 'asc' }],
+    });
+    return this.reassignSlots(houseId, rows, 'ABSENCE');
+  }
+
+  /** Giao lại các ca TODO `slots` (đã lọc) cho người đủ điều kiện; không ai nhận được thì UNASSIGNED. */
+  private async reassignSlots(
+    houseId: string,
+    slots: { id: string; choreId: string; assigneeId: string | null; weekStart: Date; occurrenceDate: Date; weightSnapshot: number }[],
+    kind: 'ORPHAN' | 'ABSENCE',
+  ): Promise<{ moved: number; unassigned: number }> {
+    if (slots.length === 0) return { moved: 0, unassigned: 0 };
 
     let moved = 0;
     let unassigned = 0;
     const touched: string[] = [];
-    const byWeek = new Map<DateStr, typeof orphans>();
-    for (const o of orphans) byWeek.set(dsOf(o.weekStart), [...(byWeek.get(dsOf(o.weekStart)) ?? []), o]);
+    const byWeek = new Map<DateStr, typeof slots>();
+    for (const o of slots) byWeek.set(dsOf(o.weekStart), [...(byWeek.get(dsOf(o.weekStart)) ?? []), o]);
 
     for (const [weekStart, rows] of byWeek) {
       const ctx = await buildGenContext(this.prisma, houseId, weekStart, 0);
@@ -208,14 +243,12 @@ export class ScheduleService {
 
       for (const o of rows) {
         const day = dsOf(o.occurrenceDate);
-        const avail = ctx.input.members.filter((m) => !m.absentDates.has(day)).map((m) => m.id);
+        const avail = ctx.input.members.filter((m) => m.id !== o.assigneeId && !m.absentDates.has(day)).map((m) => m.id);
         const underCap = avail.filter((m) => (perDay.get(`${m}|${day}`) ?? 0) < ctx.input.maxSlotsPerDay);
         const pool = underCap.length > 0 ? underCap : avail;
         const preferred = pool.filter((m) => !fenced.has(`${m}|${o.choreId}`));
         const pick = (preferred.length > 0 ? preferred : pool).sort((a, b) => load[a] - load[b])[0];
-        const data = pick
-          ? { assigneeId: pick, source: 'REASSIGN' as const }
-          : { assigneeId: null, status: 'UNASSIGNED' as const };
+        const data = pick ? { assigneeId: pick, source: 'REASSIGN' as const } : { assigneeId: null, status: 'UNASSIGNED' as const };
         const { count } = await this.prisma.choreAssignment.updateMany({ where: { id: o.id, status: 'TODO', assigneeId: o.assigneeId }, data });
         if (count === 0) continue;
         touched.push(o.id);
@@ -224,7 +257,7 @@ export class ScheduleService {
           load[pick] += o.weightSnapshot;
           perDay.set(`${pick}|${day}`, (perDay.get(`${pick}|${day}`) ?? 0) + 1);
         } else unassigned++;
-        await this.audit.log(houseId, null, pick ? 'ORPHAN_REASSIGN' : 'ORPHAN_UNASSIGNED', { from: o.assigneeId, to: pick ?? null }, { assignmentId: o.id });
+        await this.audit.log(houseId, null, `${kind}_${pick ? 'REASSIGN' : 'UNASSIGNED'}`, { from: o.assigneeId, to: pick ?? null }, { assignmentId: o.id });
       }
     }
     if (touched.length > 0) this.events.emitToHouse(houseId, 'chore:reassigned', { assignmentIds: touched });

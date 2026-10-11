@@ -45,6 +45,7 @@ export async function createFixture(
       http().post(path).set('Authorization', `Bearer ${token}`).send(body),
     patch: (path: string, body?: object) =>
       http().patch(path).set('Authorization', `Bearer ${token}`).send(body),
+    delete: (path: string) => http().delete(path).set('Authorization', `Bearer ${token}`),
   });
 
   /** Tạo nhà: người đầu là ADMIN, những người sau vào bằng mã mời. */
