@@ -38,23 +38,32 @@ describe('Absences, breaks & audit (e2e)', () => {
     it('S-20: slot TODO trong khoảng vắng còn ≥ 24h được dời cho người khác (REASSIGN), slot ngoài khoảng giữ nguyên', async () => {
       const h = await dailyHouse(['Hùng', 'Thiện', 'Mai']);
       await svc.ensureSchedule(h.houseId, next, 'CRON', monday);
-      const thien = h.memberId(h.users[1]);
       const before = await slots(h.houseId, next);
-      const inRange = before.filter((s) => s.assigneeId === thien && s.occurrenceDate >= dateOf(tue) && s.occurrenceDate <= dateOf(thu));
-      const outside = before.filter((s) => s.assigneeId === thien && !inRange.includes(s));
+      const inTuesdayToThursday = (s: (typeof before)[number]) => s.occurrenceDate >= dateOf(tue) && s.occurrenceDate <= dateOf(thu);
+      // Chọn người thực sự có ca trong T3–T5 (phụ thuộc lần xáo ngẫu nhiên nên không giả định trước là ai).
+      const idx = [0, 1, 2].reduce((best, i) =>
+        before.filter((s) => s.assigneeId === h.memberId(h.users[i]) && inTuesdayToThursday(s)).length >
+        before.filter((s) => s.assigneeId === h.memberId(h.users[best]) && inTuesdayToThursday(s)).length
+          ? i
+          : best,
+      0);
+      const absent = h.users[idx];
+      const absentMember = h.memberId(absent);
+      const inRange = before.filter((s) => s.assigneeId === absentMember && inTuesdayToThursday(s));
+      const outside = before.filter((s) => s.assigneeId === absentMember && !inTuesdayToThursday(s));
       expect(inRange.length).toBeGreaterThan(0);
 
       const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
-      const res = await fx.as(h.users[1].token).post(absences(h.houseId), { startDate: tue, endDate: thu, reason: 'Về quê' }).expect(201);
-      expect(res.body).toMatchObject({ userId: h.users[1].id, startDate: tue, endDate: thu, reason: 'Về quê' });
+      const res = await fx.as(absent.token).post(absences(h.houseId), { startDate: tue, endDate: thu, reason: 'Về quê' }).expect(201);
+      expect(res.body).toMatchObject({ userId: absent.id, startDate: tue, endDate: thu, reason: 'Về quê' });
 
       const after = await slots(h.houseId, next);
       for (const s of inRange) {
         const now = after.find((x) => x.id === s.id)!;
-        expect(now.assigneeId).not.toBe(thien);
-        expect(now).toMatchObject({ source: 'REASSIGN', status: 'TODO', originalAssigneeId: thien });
+        expect(now.assigneeId).not.toBe(absentMember);
+        expect(now).toMatchObject({ source: 'REASSIGN', status: 'TODO', originalAssigneeId: absentMember });
       }
-      for (const s of outside) expect(after.find((x) => x.id === s.id)!.assigneeId).toBe(thien);
+      for (const s of outside) expect(after.find((x) => x.id === s.id)!.assigneeId).toBe(absentMember);
       expect(emit).toHaveBeenCalledWith(h.houseId, 'chore:reassigned', expect.objectContaining({ assignmentIds: expect.any(Array) }));
     });
 

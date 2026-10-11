@@ -20,7 +20,7 @@ export class ChoreSettingsService {
   async update(houseId: string, actorMemberId: string, dto: UpdateChoreSettingsDto): Promise<ChoreSettingsDto> {
     const before = await this.get(houseId);
     const after = await this.prisma.house.update({ where: { id: houseId }, data: dto, select: SELECT });
-    await this.audit.log(houseId, actorMemberId, 'SETTINGS_UPDATED', { before: { ...before }, after: { ...after } });
+    await this.audit.log(houseId, actorMemberId, 'SETTINGS_UPDATED', { before: { choreGraceHours: before.choreGraceHours, maxSlotsPerPersonPerDay: before.maxSlotsPerPersonPerDay }, after: { choreGraceHours: after.choreGraceHours, maxSlotsPerPersonPerDay: after.maxSlotsPerPersonPerDay } });
     return after;
   }
 }

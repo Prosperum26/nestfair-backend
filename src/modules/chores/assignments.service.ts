@@ -74,6 +74,6 @@ export class AssignmentsService {
         reasons: view.schedule.reasons,
       });
     }
-    return { changed, message, ...view };
+    return { changed, message, schedule: view.schedule, assignments: view.assignments };
   }
 }
