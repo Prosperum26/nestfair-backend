@@ -1,5 +1,6 @@
 // NestFair — Prisma schema
 // Issue #3: User, RefreshToken, House, HouseMember.
+// Issue chores: Chore, ChoreAssignment.
 
 generator client {
   provider            = "prisma-client"
@@ -29,6 +30,7 @@ model User {
 
   refreshTokens RefreshToken[]
   memberships   HouseMember[]
+  absences      MemberAbsence[]
 
   @@map("users")
 }
@@ -69,7 +71,18 @@ model House {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  members HouseMember[]
+  /// Ân hạn nộp muộn (giờ) sau dueAt; quá hạn + ân hạn thì cron đánh MISSED.
+  choreGraceHours         Int @default(3)
+  /// Số ca tối đa một người nhận trong một ngày (ràng buộc tốt nhất, xem H3).
+  maxSlotsPerPersonPerDay Int @default(2)
+
+  members       HouseMember[]
+  chores        Chore[]
+  assignments   ChoreAssignment[]
+  weekSchedules WeekSchedule[]
+  absences      MemberAbsence[]
+  breaks        HouseBreak[]
+  auditLogs     ChoreAuditLog[]
 
   @@map("houses")
 }
@@ -88,7 +101,222 @@ model HouseMember {
   house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  assignments         ChoreAssignment[] @relation("AssignmentAssignee")
+  verifiedAssignments ChoreAssignment[] @relation("AssignmentVerifier")
+  originalAssignments ChoreAssignment[] @relation("AssignmentOriginalAssignee")
+
   @@index([houseId])
   @@index([userId])
   @@map("house_members")
+}
+
+enum ChoreFrequency {
+  DAILY
+  WEEKLY
+  /// Việc đột xuất (Lucky Wheel): không nằm trong lịch xoay.
+  ADHOC
+}
+
+enum RotationMode {
+  /// Một người sở hữu việc cả tuần (rào 3 tuần áp dụng).
+  WEEK_BLOCK
+  /// Mỗi lần một người, xoay vòng bằng khối hoán vị (giãn cách giữa các lần).
+  PER_OCCURRENCE
+}
+
+enum ScheduleStatus {
+  PUBLISHED
+  LOCKED
+  EMPTY
+}
+
+enum GeneratedBy {
+  CRON
+  CATCHUP
+  USER
+  ADMIN_REROLL
+}
+
+enum AssignmentSource {
+  ROTATION
+  SWAP
+  COVER
+  PAYBACK
+  WHEEL
+  REASSIGN
+}
+
+enum AssignmentStatus {
+  TODO
+  PENDING_VERIFY
+  DONE
+  REJECTED
+  MISSED
+  CANCELLED
+  UNASSIGNED
+}
+
+enum VerifyMode {
+  PEER
+  AUTO_APPROVED
+  SELF_ATTESTED
+  ADMIN_OVERRIDE
+}
+
+/// Định nghĩa việc. Ràng buộc SQL tay trong migration: weight 1–5, recurrenceDays thuộc 1..7, dueTime HH:mm.
+model Chore {
+  id             String         @id @default(uuid()) @db.Uuid
+  houseId        String         @db.Uuid
+  title          String
+  weight         Int
+  frequency      ChoreFrequency @default(WEEKLY)
+  /// ISO 1 = Thứ Hai … 7 = Chủ Nhật. DAILY = [1..7], ADHOC = [].
+  recurrenceDays Int[]
+  /// "HH:mm" giờ nhà (Asia/Ho_Chi_Minh).
+  dueTime        String         @default("21:00")
+  rotationMode   RotationMode   @default(WEEK_BLOCK)
+  /// Chỉ PER_OCCURRENCE: cùng người không làm lại trong `occurrenceGap` lần kế tiếp.
+  occurrenceGap  Int            @default(1)
+  /// false = soft-delete, không xóa vật lý.
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  house       House             @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  assignments ChoreAssignment[]
+
+  @@index([houseId])
+  @@map("chores")
+}
+
+/// Một lịch / nhà / tuần. UNIQUE(houseId, weekStart) chống sinh trùng.
+model WeekSchedule {
+  id                String         @id @default(uuid()) @db.Uuid
+  houseId           String         @db.Uuid
+  /// Thứ Hai của tuần (giờ nhà).
+  weekStart         DateTime       @db.Date
+  weekKey           String
+  status            ScheduleStatus
+  generatedBy       GeneratedBy
+  /// Seed RNG: tái lập được và minh bạch.
+  seed              Int
+  attempts          Int
+  /// W_eff đã áp dụng (3/2/1).
+  fenceWeeksApplied Int
+  relaxLevel        Int            @default(0)
+  relaxed           Boolean        @default(false)
+  reasons           String[]
+  rerollCount       Int            @default(0)
+  loadSnapshot      Json
+  algoVersion       String
+  createdAt         DateTime       @default(now())
+
+  house       House             @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  assignments ChoreAssignment[]
+
+  @@unique([houseId, weekStart])
+  @@map("week_schedules")
+}
+
+/// Một ca trực = một việc vào một ngày. Định danh (choreId, occurrenceDate, slotIndex).
+model ChoreAssignment {
+  id                 String           @id @default(uuid()) @db.Uuid
+  houseId            String           @db.Uuid
+  scheduleId         String?          @db.Uuid
+  choreId            String           @db.Uuid
+  /// HouseMember.id; null khi UNASSIGNED.
+  assigneeId         String?          @db.Uuid
+  /// Người được giao lúc xếp lịch; đổi ca sau này chỉ đổi assigneeId.
+  originalAssigneeId String?          @db.Uuid
+  weekKey            String
+  weekStart          DateTime         @db.Date
+  occurrenceDate     DateTime         @db.Date
+  slotIndex          Int              @default(0)
+  dueAt              DateTime
+  /// Chụp lại để đổi tên / weight việc sau này không làm sai lịch sử.
+  titleSnapshot      String
+  weightSnapshot     Int
+  source             AssignmentSource
+  status             AssignmentStatus @default(TODO)
+  proofImageUrl      String?
+  /// SHA-256 ảnh minh chứng, chặn nộp lại ảnh cũ.
+  proofHash          String?
+  submittedAt        DateTime?
+  isLate             Boolean          @default(false)
+  rejectCount        Int              @default(0)
+  /// HouseMember.id của người duyệt (khác assignee); null nếu duyệt tự động.
+  verifiedById       String?          @db.Uuid
+  verifiedAt         DateTime?
+  verifyMode         VerifyMode?
+  rejectReason       String?
+  disputed           Boolean          @default(false)
+  /// Idempotency-Key của lần check-in gần nhất.
+  checkinKey         String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  house            House         @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  schedule         WeekSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  chore            Chore         @relation(fields: [choreId], references: [id], onDelete: Cascade)
+  assignee         HouseMember?  @relation("AssignmentAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  originalAssignee HouseMember?  @relation("AssignmentOriginalAssignee", fields: [originalAssigneeId], references: [id], onDelete: Restrict)
+  verifiedBy       HouseMember?  @relation("AssignmentVerifier", fields: [verifiedById], references: [id], onDelete: Restrict)
+
+  @@unique([choreId, occurrenceDate, slotIndex])
+  @@index([houseId, weekStart])
+  @@index([houseId, proofHash])
+  @@index([assigneeId, choreId, weekStart])
+  @@index([status, dueAt])
+  @@map("chore_assignments")
+}
+
+/// Thành viên vắng (gồm cả hai đầu). CHECK endDate >= startDate trong migration.
+model MemberAbsence {
+  id          String   @id @default(uuid()) @db.Uuid
+  houseId     String   @db.Uuid
+  userId      String   @db.Uuid
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  reason      String?
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([houseId, startDate, endDate])
+  @@map("member_absences")
+}
+
+/// Cả nhà vắng (Tết, du lịch…): không sinh ca trong khoảng này.
+model HouseBreak {
+  id          String   @id @default(uuid()) @db.Uuid
+  houseId     String   @db.Uuid
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  reason      String?
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+
+  @@index([houseId, startDate, endDate])
+  @@map("house_breaks")
+}
+
+/// Mọi thao tác override / re-roll / duyệt tự động / khai vắng.
+model ChoreAuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  houseId      String   @db.Uuid
+  actorId      String?  @db.Uuid
+  action       String
+  assignmentId String?  @db.Uuid
+  scheduleId   String?  @db.Uuid
+  detail       Json
+  createdAt    DateTime @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+
+  @@index([houseId, createdAt])
+  @@map("chore_audit_logs")
 }

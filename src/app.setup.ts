@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import type { Env } from './config/env.validation.js';
+import { SocketIoAdapter } from './modules/events/socket-io.adapter.js';
 
 /** Cấu hình dùng chung cho main.ts và e2e test. */
 export function configureApp(app: INestApplication) {
@@ -15,6 +16,7 @@ export function configureApp(app: INestApplication) {
     origin: config.get('CORS_ORIGINS', { infer: true }).split(','),
     credentials: true,
   });
+  app.useWebSocketAdapter(new SocketIoAdapter(app));
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

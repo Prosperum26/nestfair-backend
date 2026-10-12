@@ -37,6 +37,19 @@ export class Env {
   @IsInt()
   REFRESH_TOKEN_TTL_DAYS: number = 7;
 
+  // Cloudinary: để trống = tắt upload ảnh (check-in trả 503).
+  @IsOptional()
+  @IsString()
+  CLOUDINARY_CLOUD_NAME?: string;
+
+  @IsOptional()
+  @IsString()
+  CLOUDINARY_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  CLOUDINARY_API_SECRET?: string;
+
   @IsOptional()
   @IsString()
   GOOGLE_CLIENT_ID?: string;
