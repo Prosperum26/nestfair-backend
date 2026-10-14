@@ -42,6 +42,8 @@ src/
     ├── users/          hồ sơ + tài khoản nhận tiền (ngân hàng + STK)
     ├── houses/         nhà, mã mời, thành viên; HouseMemberGuard, HouseRolesGuard, @CurrentMembership
     ├── chores/         việc nhà: lịch xoay vòng công bằng (algorithms/), check-in ảnh, duyệt chéo, vắng mặt, nghỉ nhà, nhật ký
+    ├── expenses/       sổ chi: chia tiền + Min Cash Flow (algorithms/), CRUD khoản chi, thống kê tháng, LedgerService (số dư ròng)
+    ├── settlements/    kế hoạch thanh toán tối ưu, tài khoản nhận tiền (VietQR), báo chuyển / xác nhận / hủy
     ├── events/         Socket.IO gateway, EventsService (room house:<id>, user:<id>)
     ├── scheduler/      cron: tạo lịch tuần mới, quá hạn, tự duyệt, dọn ảnh, khóa tuần (xem mục Việc nhà)
     └── uploads/        CloudinaryService + kiểm tra ảnh (jpeg/png/webp, 5MB)
@@ -94,6 +96,9 @@ npm run seed       # Nhà 12A + 4 tài khoản, chạy lại bao nhiêu lần c�
 
 Mật khẩu chung: `NestFair123`. Mã mời Nhà 12A: `K7M2QZ` (seed đặt lại hạn 7 ngày mỗi lần chạy). Nhà 12A tối đa 5 người nên còn 1 chỗ để thử luồng vào nhà bằng mã.
 
+Sổ chi: tháng 10.2026 có 6 hóa đơn, tổng 2.280.000đ (khớp ảnh thiết kế 07). Tháng 9 đã tất toán hết. Thiện đang báo chuyển 380.000đ cho Mai (chờ Mai xác nhận).
+Kế hoạch rút gọn: Thiện → Mai 380.000đ, Hùng → Quân 170.000đ.
+
 ## Auth (tóm tắt)
 
 - Access token JWT 15 phút trong body, client gửi `Authorization: Bearer`.
@@ -109,7 +114,7 @@ Mật khẩu chung: `NestFair123`. Mã mời Nhà 12A: `K7M2QZ` (seed đặt l�
 
 ### Bật upload ảnh (Cloudinary)
 
-Check-in việc nhà cần ảnh minh chứng. Điền `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` vào `.env` (lấy ở Cloudinary Dashboard). Chưa điền thì `POST /assignments/:id/checkin` trả `503`.
+Check-in việc nhà, ảnh hóa đơn và bill chuyển khoản cần ảnh. Điền `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` vào `.env` (lấy ở Cloudinary Dashboard). Chưa điền thì `POST /assignments/:id/checkin` trả `503`.
 
 ## Việc nhà (Issue #4 v2)
 
@@ -157,3 +162,42 @@ Khi server khởi động cũng sinh bù lịch cho mọi nhà (cron có thể b
 
 **Giới hạn đã biết.** Mỗi ca một người; chỉ lặp theo tuần; không chặn việc Admin tạo bản sao việc để né rào (chỉ có nhật ký); chống gian lận ảnh ở mức băm trùng + duyệt chéo;
 chưa có "Xếp bổ sung" giữa tuần và duyệt khai vắng dài ngày.
+
+## Chi tiêu & thanh toán (Issue #9)
+
+**Nguyên tắc.** Tiền là số nguyên VNĐ. Không lưu bảng nợ: số dư ròng của mỗi người = `Σ đã trả − Σ phần chịu`, cộng chỉnh theo settlement `CONFIRMED`
+(người chuyển +, người nhận −), tính lại từ dữ liệu gốc mỗi lần (`LedgerService`). Settlement `PENDING` chưa tính.
+
+- **Chia tiền** (`expenses/algorithms/split.ts`): `EQUAL` chia cả nhà, `CUSTOM` chia đều cho người được chọn, `EXACT` nhập từng người (tổng phải khớp).
+  Phần dư cộng lần lượt 1đ từ người vào nhà sớm nhất. `ITEMIZED` có trong enum nhưng chưa hỗ trợ (chờ OCR).
+- **Min Cash Flow** (`expenses/algorithms/min-cash-flow.ts`): ghép con nợ lớn nhất với chủ nợ lớn nhất, tối đa N−1 giao dịch, kết quả xác định.
+  Ném lỗi nếu tổng số dư khác 0 thay vì âm thầm làm mất tiền.
+- **Báo chuyển / xác nhận:** người nợ tạo `PENDING` (không vượt số còn nợ và số người nhận còn được nhận), người nhận xác nhận → `CONFIRMED`.
+  Mỗi cặp chỉ một báo đang chờ (partial unique index). Xác nhận là một `UPDATE ... WHERE status = 'PENDING'` nên bấm đúp chỉ thành công một lần.
+
+**API** (prefix `/api/v1/houses/:id`):
+
+| Method | Endpoint | Ghi chú |
+| :-- | :-- | :-- |
+| GET | `/expenses?month=2026-10&payerId=&category=&q=` | sổ chi theo tháng (giờ VN), kèm `splits`, `myShare`, `canEdit` |
+| GET | `/expenses/summary?month=` | tổng tháng, bạn đã trả, phần của bạn, `diff`, theo danh mục |
+| POST | `/expenses` | `{ title, category, totalAmount, splitType, payerId?, participantIds? (CUSTOM), splits? (EXACT), spentAt?, note?, receiptImageUrl? }` |
+| GET/PATCH/DELETE | `/expenses/:expenseId` | sửa/xóa: người trả, người ghi hoặc trưởng phòng; đổi tiền / kiểu chia thì chia lại |
+| POST | `/expenses/receipt-image` | multipart `photo` → `{ url }` |
+| GET | `/settlements/plan` | `members` (kèm `net`), `raw` (nợ chéo, sơ đồ "Trước"), `optimized` (kèm `pending`), `rawTotal`, `optimizedTotal` |
+| GET | `/settlements/payment-info/:userId` | ngân hàng, STK đầy đủ, `accountName` bỏ dấu để dựng VietQR |
+| GET | `/settlements?month=&scope=all\|mine` | lịch sử tất toán |
+| POST | `/settlements` | `{ toUserId, amount, proofUrl?, note? }` → `PENDING` |
+| POST | `/settlements/proof` | multipart `photo` → `{ url }` (bill chuyển khoản) |
+| PATCH | `/settlements/:settlementId/confirm` | chỉ người nhận |
+| PATCH | `/settlements/:settlementId/cancel` | người chuyển hoặc người nhận |
+
+**Lỗi** (`code`): `SPLIT_INVALID`, `SPLIT_SUM_MISMATCH`, `SPLIT_TYPE_NOT_SUPPORTED`, `NOT_A_HOUSE_MEMBER`, `SPENT_AT_IN_FUTURE`, `RECEIPT_URL_INVALID`,
+`EXPENSE_NOT_FOUND`, `EXPENSE_FORBIDDEN`, `MEMBER_NOT_FOUND`, `PAYMENT_INFO_MISSING`, `SETTLEMENT_SELF`, `SETTLEMENT_AMOUNT_EXCEEDS_DEBT`,
+`SETTLEMENT_ALREADY_PENDING` (409), `SETTLEMENT_NOT_PENDING` (409), `SETTLEMENT_NOT_FOUND`, `NOT_SETTLEMENT_RECEIVER`, `NOT_SETTLEMENT_PARTY`, `PROOF_URL_INVALID`.
+
+**Realtime** (room `house:<id>`): `expense:new` `{ expenseId, title, payer, amount, fromReceipt }`, `expense:updated`, `expense:deleted`,
+`settlement:requested`, `settlement:cancelled`, `debt:settled` `{ settlementId, fromUserId, toUserId, amount }`.
+
+**Giới hạn đã biết.** Ảnh tải lên nhưng không gắn vào khoản chi / báo chuyển nào thì chưa có job dọn. Chưa chặn rời nhà khi số dư ≠ 0
+(`LedgerService.netBalances` đã sẵn để issue nhà dùng). Greedy bảo đảm ≤ N−1 giao dịch, không bảo đảm ít nhất tuyệt đối.
