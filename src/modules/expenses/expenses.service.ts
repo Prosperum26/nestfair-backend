@@ -9,7 +9,7 @@ import { CloudinaryService, publicIdFromUrl } from '../uploads/cloudinary.servic
 import { type UploadedImage, validateImageFile } from '../uploads/image-validation.js';
 import { computeSplit, type SplitShare } from './algorithms/split.js';
 import type { CreateExpenseDto, ExactSplitDto } from './dto/create-expense.dto.js';
-import type { ExpenseDto, UploadedUrlDto } from './dto/expense-response.dto.js';
+import type { ExpenseDto, ExpenseSummaryDto, UploadedUrlDto } from './dto/expense-response.dto.js';
 import type { ListExpensesQuery } from './dto/list-expenses.query.js';
 import type { UpdateExpenseDto } from './dto/update-expense.dto.js';
 import { monthKeyOf, monthRange } from './month.js';
@@ -63,6 +63,41 @@ export class ExpensesService {
       orderBy: [{ spentAt: 'desc' }, { createdAt: 'desc' }],
     });
     return rows.map((e) => this.toDto(e, m));
+  }
+
+  /** Thống kê đầu trang sổ chi (ảnh 07): tổng tháng, bạn đã trả, phần của bạn, theo danh mục. Tính bằng aggregate SQL. */
+  async summary(m: HouseMembership, month: string | undefined, now = new Date()): Promise<ExpenseSummaryDto> {
+    const key = month ?? monthKeyOf(now);
+    const { start, end } = monthRange(key);
+    const inMonth = { houseId: m.houseId, spentAt: { gte: start, lt: end } };
+
+    const [all, mine, share, categories, participants] = await Promise.all([
+      this.prisma.expense.aggregate({ where: inMonth, _sum: { totalAmount: true }, _count: true }),
+      this.prisma.expense.aggregate({ where: { ...inMonth, payerId: m.userId }, _sum: { totalAmount: true }, _count: true }),
+      this.prisma.expenseSplit.aggregate({ where: { userId: m.userId, expense: inMonth }, _sum: { allocatedAmount: true } }),
+      this.prisma.expense.groupBy({
+        by: ['category'],
+        where: inMonth,
+        _sum: { totalAmount: true },
+        _count: true,
+        orderBy: { _sum: { totalAmount: 'desc' } },
+      }),
+      this.prisma.expenseSplit.findMany({ where: { expense: inMonth }, distinct: ['userId'], select: { userId: true } }),
+    ]);
+
+    const paidByMe = mine._sum.totalAmount ?? 0;
+    const myShare = share._sum.allocatedAmount ?? 0;
+    return {
+      month: key,
+      totalAmount: all._sum.totalAmount ?? 0,
+      expenseCount: all._count,
+      participantCount: participants.length,
+      paidByMe,
+      paidByMeCount: mine._count,
+      myShare,
+      diff: paidByMe - myShare,
+      byCategory: categories.map((c) => ({ category: c.category, amount: c._sum.totalAmount ?? 0, count: c._count })),
+    };
   }
 
   async get(m: HouseMembership, id: string): Promise<ExpenseDto> {

@@ -268,4 +268,57 @@ describe('Expenses (e2e)', () => {
 
     await fx.http().post(url(a.houseId, '/receipt-image')).set('Authorization', `Bearer ${a.users[0].token}`).expect(400);
   });
+
+  it('summary khớp ảnh 07: tổng 2.280.000đ, 6 hóa đơn, Hùng trả 380.000đ, chịu 550.000đ, chênh −170.000đ', async () => {
+    const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
+    const [hung, thien, mai, quan] = users;
+    const post = (token: string, body: object) => fx.as(token).post(url(houseId), { ...base, ...body }).expect(201);
+    const day = (d: string) => `2026-10-${d}T12:00:00+07:00`;
+    await post(mai.token, { title: 'Nước rửa chén & giấy', category: 'SUPPLIES', totalAmount: 120_000, spentAt: day('05') });
+    await post(hung.token, { title: 'Bình gas', category: 'OTHER', totalAmount: 380_000, spentAt: day('05') });
+    await post(quan.token, {
+      title: 'Đi chợ cuối tuần',
+      category: 'FOOD',
+      totalAmount: 520_000,
+      splitType: 'EXACT',
+      spentAt: day('04'),
+      splits: [
+        { userId: hung.id, amount: 110_000 },
+        { userId: thien.id, amount: 120_000 },
+        { userId: mai.id, amount: 140_000 },
+        { userId: quan.id, amount: 150_000 },
+      ],
+    });
+    await post(quan.token, { title: 'Wifi tháng 10', category: 'INTERNET', totalAmount: 240_000, spentAt: day('03') });
+    await post(thien.token, { title: 'Tiền nước', category: 'WATER', totalAmount: 180_000, spentAt: day('02') });
+    await post(mai.token, { title: 'Tiền điện tháng 10', category: 'ELECTRICITY', totalAmount: 840_000, spentAt: day('01') });
+    // Tháng khác không được tính.
+    await post(hung.token, { title: 'Tháng 9', totalAmount: 999_000, spentAt: '2026-09-15T12:00:00+07:00' });
+
+    const res = await fx.as(hung.token).get(url(houseId, '/summary?month=2026-10')).expect(200);
+    expect(res.body).toEqual({
+      month: '2026-10',
+      totalAmount: 2_280_000,
+      expenseCount: 6,
+      participantCount: 4,
+      paidByMe: 380_000,
+      paidByMeCount: 1,
+      myShare: 550_000,
+      diff: -170_000,
+      byCategory: [
+        { category: 'ELECTRICITY', amount: 840_000, count: 1 },
+        { category: 'FOOD', amount: 520_000, count: 1 },
+        { category: 'OTHER', amount: 380_000, count: 1 },
+        { category: 'INTERNET', amount: 240_000, count: 1 },
+        { category: 'WATER', amount: 180_000, count: 1 },
+        { category: 'SUPPLIES', amount: 120_000, count: 1 },
+      ],
+    });
+
+    const empty = await fx.as(hung.token).get(url(houseId, '/summary?month=2026-08')).expect(200);
+    expect(empty.body).toMatchObject({ totalAmount: 0, expenseCount: 0, participantCount: 0, paidByMe: 0, myShare: 0, diff: 0, byCategory: [] });
+    await fx.as(hung.token).get(url(houseId, '/summary?month=10-2026')).expect(400);
+    const outsider = await fx.user('Người lạ');
+    await fx.as(outsider.token).get(url(houseId, '/summary')).expect(403);
+  });
 });

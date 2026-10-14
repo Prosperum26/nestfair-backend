@@ -33,8 +33,8 @@ import { CurrentMembership } from '../houses/decorators/current-membership.decor
 import { type HouseMembership, HouseMemberGuard } from '../houses/guards/house-member.guard.js';
 import type { UploadedImage } from '../uploads/image-validation.js';
 import { CreateExpenseDto } from './dto/create-expense.dto.js';
-import { ExpenseDto, UploadedUrlDto } from './dto/expense-response.dto.js';
-import { ListExpensesQuery } from './dto/list-expenses.query.js';
+import { ExpenseDto, ExpenseSummaryDto, UploadedUrlDto } from './dto/expense-response.dto.js';
+import { ListExpensesQuery, MonthQuery } from './dto/list-expenses.query.js';
 import { UpdateExpenseDto } from './dto/update-expense.dto.js';
 import { ExpensesService } from './expenses.service.js';
 
@@ -59,6 +59,14 @@ export class ExpensesController {
   @ApiOkResponse({ type: [ExpenseDto] })
   list(@CurrentMembership() m: HouseMembership, @Query() query: ListExpensesQuery): Promise<ExpenseDto[]> {
     return this.expenses.list(m, query);
+  }
+
+  // Khai báo trước ':expenseId' để route động không bắt mất.
+  @Get('summary')
+  @ApiOperation({ summary: 'Thống kê tháng: tổng chi, bạn đã trả, phần của bạn, theo danh mục' })
+  @ApiOkResponse({ type: ExpenseSummaryDto })
+  summary(@CurrentMembership() m: HouseMembership, @Query() query: MonthQuery): Promise<ExpenseSummaryDto> {
+    return this.expenses.summary(m, query.month);
   }
 
   @Post()
