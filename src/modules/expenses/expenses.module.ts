@@ -4,10 +4,13 @@ import { HousesModule } from '../houses/houses.module.js';
 import { UploadsModule } from '../uploads/uploads.module.js';
 import { ExpensesController } from './expenses.controller.js';
 import { ExpensesService } from './expenses.service.js';
+import { LedgerService } from './ledger.service.js';
 
+/** Export LedgerService để module thanh toán (và sau này rời nhà) đọc số dư ròng. */
 @Module({
   imports: [AuthModule, HousesModule, UploadsModule],
   controllers: [ExpensesController],
-  providers: [ExpensesService],
+  providers: [ExpensesService, LedgerService],
+  exports: [LedgerService],
 })
 export class ExpensesModule {}
