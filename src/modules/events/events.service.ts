@@ -11,7 +11,9 @@ export type ChoreEvent =
   | 'chore:cancelled';
 /** Sổ chi: `expense:new` theo đặc tả; sửa/xóa để client tải lại. */
 export type ExpenseEvent = 'expense:new' | 'expense:updated' | 'expense:deleted';
-export type RealtimeEvent = ChoreEvent | ExpenseEvent | 'reminder:due';
+/** Tất toán: `debt:settled` theo đặc tả (chủ nợ xác nhận); báo chuyển / hủy để client tải lại. */
+export type SettlementEvent = 'settlement:requested' | 'settlement:cancelled' | 'debt:settled';
+export type RealtimeEvent = ChoreEvent | ExpenseEvent | SettlementEvent | 'reminder:due';
 
 export const houseRoom = (houseId: string) => `house:${houseId}`;
 export const userRoom = (userId: string) => `user:${userId}`;
