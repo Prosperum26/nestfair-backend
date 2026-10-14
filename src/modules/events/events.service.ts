@@ -9,7 +9,9 @@ export type ChoreEvent =
   | 'chore:missed'
   | 'chore:reassigned'
   | 'chore:cancelled';
-export type RealtimeEvent = ChoreEvent | 'reminder:due';
+/** Sổ chi: `expense:new` theo đặc tả; sửa/xóa để client tải lại. */
+export type ExpenseEvent = 'expense:new' | 'expense:updated' | 'expense:deleted';
+export type RealtimeEvent = ChoreEvent | ExpenseEvent | 'reminder:due';
 
 export const houseRoom = (houseId: string) => `house:${houseId}`;
 export const userRoom = (userId: string) => `user:${userId}`;
