@@ -1,6 +1,7 @@
 // NestFair — Prisma schema
 // Issue #3: User, RefreshToken, House, HouseMember.
 // Issue chores: Chore, ChoreAssignment.
+// Issue #9: Expense, ExpenseSplit, Settlement.
 
 generator client {
   provider            = "prisma-client"
@@ -31,6 +32,12 @@ model User {
   refreshTokens RefreshToken[]
   memberships   HouseMember[]
   absences      MemberAbsence[]
+
+  expensesPaid        Expense[]      @relation("ExpensePayer")
+  expensesCreated     Expense[]      @relation("ExpenseCreator")
+  expenseSplits       ExpenseSplit[]
+  settlementsSent     Settlement[]   @relation("SettlementFrom")
+  settlementsReceived Settlement[]   @relation("SettlementTo")
 
   @@map("users")
 }
@@ -83,6 +90,8 @@ model House {
   absences      MemberAbsence[]
   breaks        HouseBreak[]
   auditLogs     ChoreAuditLog[]
+  expenses      Expense[]
+  settlements   Settlement[]
 
   @@map("houses")
 }
@@ -319,4 +328,103 @@ model ChoreAuditLog {
 
   @@index([houseId, createdAt])
   @@map("chore_audit_logs")
+}
+
+enum ExpenseCategory {
+  FOOD
+  RENT
+  ELECTRICITY
+  WATER
+  INTERNET
+  SUPPLIES
+  /// Quà cảm ơn trực dùm (issue đổi ca).
+  GIFT
+  OTHER
+}
+
+enum SplitType {
+  /// Chia đều cho cả nhà (thành viên còn ở lúc ghi khoản chi).
+  EQUAL
+  /// Chọn người hưởng, chia đều trong nhóm đó.
+  CUSTOM
+  /// Nhập số tiền từng người, tổng phải khớp.
+  EXACT
+  /// Theo từng món trên hóa đơn (OCR). Chưa cài ở issue #9.
+  ITEMIZED
+}
+
+enum SettlementStatus {
+  /// Người trả báo "đã chuyển", chờ chủ nợ xác nhận. Chưa tính vào số dư.
+  PENDING
+  CONFIRMED
+  /// Người chuyển rút lại, hoặc chủ nợ báo chưa nhận được.
+  CANCELLED
+}
+
+/// Tiền là số nguyên VNĐ. Ràng buộc SQL tay: totalAmount > 0.
+/// Dùng userId (không dùng HouseMember.id) để số dư không đứt khi rời rồi vào lại nhà.
+/// Σ ExpenseSplit.allocatedAmount = totalAmount do service kiểm tra trước khi lưu.
+model Expense {
+  id              String          @id @default(uuid()) @db.Uuid
+  houseId         String          @db.Uuid
+  payerId         String          @db.Uuid
+  createdById     String          @db.Uuid
+  title           String
+  category        ExpenseCategory
+  totalAmount     Int
+  splitType       SplitType
+  spentAt         DateTime
+  note            String?
+  receiptImageUrl String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  house     House          @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  payer     User           @relation("ExpensePayer", fields: [payerId], references: [id], onDelete: Restrict)
+  createdBy User           @relation("ExpenseCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  splits    ExpenseSplit[]
+
+  @@index([houseId, spentAt])
+  @@index([payerId])
+  @@map("expenses")
+}
+
+/// Ràng buộc SQL tay: allocatedAmount >= 0.
+model ExpenseSplit {
+  id              String @id @default(uuid()) @db.Uuid
+  expenseId       String @db.Uuid
+  userId          String @db.Uuid
+  allocatedAmount Int
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([expenseId, userId])
+  @@index([userId])
+  @@map("expense_splits")
+}
+
+/// Một lần chuyển tiền giữa hai thành viên. Chỉ CONFIRMED mới ảnh hưởng số dư.
+/// SQL tay trong migration: amount > 0, fromUserId <> toUserId, confirmedAt chỉ có khi CONFIRMED,
+/// partial unique index (houseId, fromUserId, toUserId) WHERE status = 'PENDING' (mỗi cặp một báo chờ xác nhận).
+model Settlement {
+  id          String           @id @default(uuid()) @db.Uuid
+  houseId     String           @db.Uuid
+  fromUserId  String           @db.Uuid
+  toUserId    String           @db.Uuid
+  amount      Int
+  status      SettlementStatus @default(PENDING)
+  /// Ảnh bill đính kèm khi báo đã chuyển.
+  proofUrl    String?
+  note        String?
+  createdAt   DateTime         @default(now())
+  confirmedAt DateTime?
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  from  User  @relation("SettlementFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  to    User  @relation("SettlementTo", fields: [toUserId], references: [id], onDelete: Restrict)
+
+  @@index([houseId, status])
+  @@index([houseId, createdAt])
+  @@map("settlements")
 }
