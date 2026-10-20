@@ -1,6 +1,7 @@
 import type { GoogleGenAI } from '@google/genai';
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
+// Import giá trị (không phải type-only): Nest cần metadata kiểu của tham số constructor để inject.
+import { ConfigService } from '@nestjs/config';
 import type { Env } from '../../config/env.validation.js';
 import { ExtractorError, type RawReceipt, type ReceiptExtractor, type ReceiptImage } from './receipt-extractor.js';
 import { parseRawReceipt, RECEIPT_SYSTEM_PROMPT, receiptResponseSchema } from './receipt-schema.js';
