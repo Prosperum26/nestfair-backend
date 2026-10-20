@@ -36,11 +36,15 @@ export interface SwapContext {
   rotationModeOf: Map<string, string>;
 }
 
+/** `create`: mọi quy tắc cứng. `accept`: chỉ các quy tắc về trạng thái ca, người và trùng việc (spec 5.2 bước 5). */
+export type SwapPhase = 'create' | 'accept';
+
 export interface ExchangeInput {
   requesterMemberId: string;
   from: ChoreAssignment;
   to: ChoreAssignment;
   now: Date;
+  phase?: SwapPhase;
 }
 
 export interface CoverInput {
@@ -51,6 +55,7 @@ export interface CoverInput {
   compensation: Compensation;
   rewardAmount?: number | null;
   now: Date;
+  phase?: SwapPhase;
 }
 
 const STATE_COPY: Record<string, string> = {
@@ -83,7 +88,14 @@ const dd = (ds: string) => `${ds.slice(8, 10)}.${ds.slice(5, 7)}`;
 const counts = (s: ChoreAssignment) => (COUNTED_STATUSES as readonly string[]).includes(s.status);
 
 /** Đọc dữ liệu nhà cho các ca có tuần nằm trong [from, to]. */
-export async function loadSwapContext(tx: Db, houseId: string, from: Date, to: Date): Promise<SwapContext> {
+export async function loadSwapContext(
+  tx: Db,
+  houseId: string,
+  from: Date,
+  to: Date,
+  /** Bỏ qua khóa của chính yêu cầu này (kiểm lại lúc accept không được tự vướng khóa của mình). */
+  ignoreSwapId?: string,
+): Promise<SwapContext> {
   const [house, members, absences, slots] = await Promise.all([
     tx.house.findUniqueOrThrow({ where: { id: houseId }, select: { choreGraceHours: true, maxSlotsPerPersonPerDay: true } }),
     tx.houseMember.findMany({ where: { houseId }, select: { id: true, userId: true, leftAt: true, user: { select: { fullName: true } } } }),
@@ -93,7 +105,10 @@ export async function loadSwapContext(tx: Db, houseId: string, from: Date, to: D
     }),
     tx.choreAssignment.findMany({ where: { houseId, weekStart: { gte: from, lte: to } } }),
   ]);
-  const locks = await tx.swapLock.findMany({ where: { assignmentId: { in: slots.map((s) => s.id) } }, select: { assignmentId: true } });
+  const locks = await tx.swapLock.findMany({
+    where: { assignmentId: { in: slots.map((s) => s.id) }, ...(ignoreSwapId ? { swapRequestId: { not: ignoreSwapId } } : {}) },
+    select: { assignmentId: true },
+  });
   const choreIds = [...new Set(slots.map((s) => s.choreId))];
   const chores = await tx.chore.findMany({ where: { id: { in: choreIds } }, select: { id: true, rotationMode: true } });
   return {
@@ -160,8 +175,9 @@ function sourceViolations(slot: ChoreAssignment, kind: 'exchange' | 'cover', com
 /** Kiểm ràng buộc cứng cho EXCHANGE (R-SWAP-1 … 4, 8 … 11, 13). Thứ tự vi phạm theo mức ưu tiên. */
 export function evaluateExchange(ctx: SwapContext, input: ExchangeInput): Violation[] {
   const { requesterMemberId, from, to, now } = input;
+  const creating = (input.phase ?? 'create') === 'create';
   const out = new Collector();
-  if (ctx.activeCount < 2) out.add(violation('SWAP_NEEDS_2_MEMBERS'));
+  if (creating && ctx.activeCount < 2) out.add(violation('SWAP_NEEDS_2_MEMBERS'));
   if (to.assigneeId === requesterMemberId) out.add(violation('SWAP_SELF'));
   if (from.id === to.id || (from.choreId === to.choreId && from.occurrenceDate.getTime() === to.occurrenceDate.getTime())) {
     out.add(violation('SWAP_IDENTICAL_SLOT'));
@@ -184,7 +200,7 @@ export function evaluateExchange(ctx: SwapContext, input: ExchangeInput): Violat
     out.add(violation('TARGET_ABSENT', { Tên: nameOf(ctx, requesterMemberId), 'dd.mm': dd(dsOf(to.occurrenceDate)) }));
   }
   if (from.weekStart.getTime() !== to.weekStart.getTime()) out.add(violation('WEEK_MISMATCH'));
-  if (tooLateToRequest(now, [from.dueAt, to.dueAt])) out.add(violation('SWAP_TOO_LATE'));
+  if (creating && tooLateToRequest(now, [from.dueAt, to.dueAt])) out.add(violation('SWAP_TOO_LATE'));
   if (hasSameChoreThatDay(ctx, requesterMemberId, to, from.id)) {
     out.add(violation('DUPLICATE_CHORE_SAME_DAY', { Tên: nameOf(ctx, requesterMemberId), Việc: to.titleSnapshot }));
   }

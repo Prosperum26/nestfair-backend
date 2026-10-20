@@ -484,7 +484,17 @@ model ChoreSwapRequest {
   offsetDebtId       String?         @db.Uuid
   version            Int             @default(0)
   createdAt          DateTime        @default(now())
+  /// Idempotency-Key của lần tạo: cùng người, cùng key thì trả lại yêu cầu cũ.
+  createIdemKey      String?
+  /// Lúc rời PENDING (từ chối, hủy, hết hạn, chấp nhận). Dùng cho cooldown 24 giờ (R-SWAP-12).
+  closedAt           DateTime?
+  /// Lời từ chối của người nhận (tùy chọn). Chỉ người gửi, người nhận và Admin thấy.
+  rejectReason       String?         @db.VarChar(100)
+  /// ChoreAssignment.version lúc tạo, để accept phát hiện ca đã bị đổi từ chỗ khác (spec 5.2 bước 5).
+  fromVersion        Int             @default(0)
+  toVersion          Int?
 
+  @@unique([requesterMemberId, createIdemKey])
   @@index([houseId, status, expiresAt])
   @@index([rootRequestId])
   @@map("chore_swap_requests")
