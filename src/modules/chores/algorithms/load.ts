@@ -16,8 +16,9 @@ export interface HistSlot {
 }
 
 /**
- * Tải tích lũy mỗi người = Σ weight trong 6 tuần có lịch gần nhất, gồm cả ca WHEEL.
- * `credit` (tín dụng trung lập khi vắng cả tuần) và `baseline` (người mới vào) được cộng thêm.
+ * Tải tích lũy mỗi người = Σ weight trong 6 tuần có lịch gần nhất, **không gồm ca WHEEL** (đặc tả #5, Q2:
+ * ca vòng quay không tính tải). `credit` (tín dụng trung lập khi vắng cả tuần) và `baseline` (người mới vào)
+ * được cộng thêm.
  */
 export function rollingLoad(
   history: readonly HistSlot[],
@@ -28,6 +29,7 @@ export function rollingLoad(
     memberIds.map((m) => [m, (opts.credit?.[m] ?? 0) + (opts.baseline?.[m] ?? 0)]),
   );
   for (const h of history) {
+    if (h.source === 'WHEEL') continue;
     if (h.weeksBack >= 1 && h.weeksBack <= LOAD_WEEKS && h.memberId in load) load[h.memberId] += h.weight;
   }
   return load;

@@ -253,8 +253,9 @@ export class ScheduleService {
       const ctx = await buildGenContext(this.prisma, houseId, weekStart, 0);
       const ids = ctx.input.members.map((m) => m.id);
       const load = rollingLoad(ctx.input.history, ids, { credit: ctx.input.credit });
+      // Ca vòng quay không tính tải và không tính trần ca/ngày (đặc tả #5, Q2).
       const live = await this.prisma.choreAssignment.findMany({
-        where: { houseId, weekStart: dateOf(weekStart), assigneeId: { in: ids }, status: { notIn: ['CANCELLED', 'UNASSIGNED'] } },
+        where: { houseId, weekStart: dateOf(weekStart), assigneeId: { in: ids }, status: { notIn: ['CANCELLED', 'UNASSIGNED'] }, source: { not: 'WHEEL' } },
       });
       const perDay = new Map<string, number>();
       for (const a of live) {

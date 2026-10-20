@@ -86,6 +86,8 @@ export async function buildGenContext(db: Db, houseId: string, weekStart: DateSt
           weekStart: { in: scheduled.map((s) => s.weekStart) },
           assigneeId: { not: null },
           status: { in: [...COUNTED_STATUSES] },
+          // Q2 (#5): ca vòng quay không tính rào, không tính tải.
+          source: { not: 'WHEEL' },
         },
         select: { choreId: true, assigneeId: true, weightSnapshot: true, source: true, weekStart: true },
       })
