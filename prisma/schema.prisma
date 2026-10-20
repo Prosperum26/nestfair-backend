@@ -84,6 +84,7 @@ model House {
   breaks        HouseBreak[]
   auditLogs     ChoreAuditLog[]
   activities    HouseActivity[]
+  wheelLogs     LuckyWheelLog[]
 
   @@map("houses")
 }
@@ -180,6 +181,8 @@ model Chore {
   occurrenceGap  Int            @default(1)
   /// false = soft-delete, không xóa vật lý.
   isActive       Boolean        @default(true)
+  /// Việc hệ thống, không hiện ở trang cài đặt, không vào lịch xoay. Hiện chỉ dùng cho "Việc đột xuất" của Lucky Wheel.
+  isSystem       Boolean        @default(false)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -262,6 +265,8 @@ model ChoreAssignment {
   assignee         HouseMember?  @relation("AssignmentAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
   originalAssignee HouseMember?  @relation("AssignmentOriginalAssignee", fields: [originalAssigneeId], references: [id], onDelete: Restrict)
   verifiedBy       HouseMember?  @relation("AssignmentVerifier", fields: [verifiedById], references: [id], onDelete: Restrict)
+  /// Có khi ca sinh ra từ Lucky Wheel (source = WHEEL).
+  wheelLog         LuckyWheelLog?
 
   @@unique([choreId, occurrenceDate, slotIndex])
   @@index([houseId, weekStart])
@@ -348,4 +353,49 @@ model HouseActivity {
   @@unique([houseId, dedupeKey])
   @@index([houseId, createdAt])
   @@map("house_activities")
+}
+
+enum WheelStatus {
+  SPINNING
+  REVEALED
+  VOIDED
+}
+
+/// Nhật ký Lucky Wheel. Lưu userId (không phải HouseMember.id); ca tạo ra lưu assigneeId = HouseMember.id như ca thường.
+model LuckyWheelLog {
+  id             String      @id @default(uuid()) @db.Uuid
+  houseId        String      @db.Uuid
+  spunById       String      @db.Uuid
+  /// 3–60 ký tự, đã bỏ khoảng trắng thừa.
+  taskTitle      String
+  dueAt          DateTime
+  /// Người tham gia do người quay chọn (userId), theo thứ tự hiển thị.
+  participantIds String[]    @db.Uuid
+  /// Số thành viên đủ điều kiện nhưng bị bỏ khỏi vòng (để ticker minh bạch).
+  excludedCount  Int         @default(0)
+  /// Thứ tự các lát trên vòng (userId, có lặp lại), đã xáo bằng seed.
+  slices         String[]    @db.Uuid
+  selectedUserId String      @db.Uuid
+  assignmentId   String      @unique @db.Uuid
+  /// Chỉ để xáo thứ tự lát và vẽ animation. KHÔNG quyết định người trúng.
+  seed           Int
+  landingIndex   Int
+  status         WheelStatus @default(SPINNING)
+  /// Lúc bánh xe bắt đầu quay (= startAt gửi cho client).
+  spunAt         DateTime
+  durationMs     Int         @default(6000)
+  /// spunAt + durationMs
+  revealAt       DateTime
+  voidedById     String?     @db.Uuid
+  voidReason     String?
+  idempotencyKey String?
+  createdAt      DateTime    @default(now())
+
+  house      House           @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  assignment ChoreAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@unique([houseId, spunById, idempotencyKey])
+  @@index([houseId, spunAt])
+  @@index([status, revealAt])
+  @@map("lucky_wheel_logs")
 }
