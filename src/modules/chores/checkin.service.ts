@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { coded } from '../../common/coded-exception.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { actorOfUser } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { CloudinaryService } from '../uploads/cloudinary.service.js';
 import { sha256, type UploadedImage, validateImageFile } from '../uploads/image-validation.js';
@@ -99,13 +100,14 @@ export class CheckinService {
     }
 
     const row = await this.prisma.choreAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: ASSIGNMENT_INCLUDE });
-    this.events.emitToHouse(row.houseId, 'chore:submitted', {
-      assignmentId: row.id,
-      weekKey: row.weekKey,
-      assigneeId: row.assigneeId,
-      status: row.status,
-      verifyMode: row.verifyMode,
-    });
+    const outbox = this.events.outbox();
+    outbox.toHouse(
+      row.houseId,
+      'chore:submitted',
+      { assignmentId: row.id, weekKey: row.weekKey, assigneeId: row.assigneeId, status: row.status, verifyMode: row.verifyMode },
+      await actorOfUser(this.prisma, userId),
+    );
+    outbox.flush();
     return toAssignmentDto(row);
   }
 }

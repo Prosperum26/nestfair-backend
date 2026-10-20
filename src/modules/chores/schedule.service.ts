@@ -268,7 +268,7 @@ export class ScheduleService {
         await this.audit.log(houseId, null, `${kind}_${pick ? 'REASSIGN' : 'UNASSIGNED'}`, { from: o.assigneeId, to: pick ?? null }, { assignmentId: o.id });
       }
     }
-    if (touched.length > 0) this.events.emitToHouse(houseId, 'chore:reassigned', { assignmentIds: touched });
+    if (touched.length > 0) this.events.outbox().toHouse(houseId, 'chore:reassigned', { assignmentIds: touched }).flush();
     return { moved, unassigned };
   }
 

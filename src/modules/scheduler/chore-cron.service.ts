@@ -73,11 +73,10 @@ export class ChoreCronService implements OnApplicationBootstrap {
         houses++;
         if (res.created) {
           created++;
-          this.events.emitToHouse(houseId, 'chore:shuffled', {
-            weekKey: res.schedule.weekKey,
-            relaxed: res.schedule.relaxed,
-            reasons: res.schedule.reasons,
-          });
+          this.events
+            .outbox()
+            .toHouse(houseId, 'chore:shuffled', { weekKey: res.schedule.weekKey, relaxed: res.schedule.relaxed, reasons: res.schedule.reasons })
+            .flush();
         }
       } catch (e) {
         // Một nhà lỗi không được chặn các nhà còn lại.
@@ -109,7 +108,9 @@ export class ChoreCronService implements OnApplicationBootstrap {
 
     const byHouse = new Map<string, string[]>();
     for (const r of rows) byHouse.set(r.houseId, [...(byHouse.get(r.houseId) ?? []), r.id]);
-    for (const [houseId, assignmentIds] of byHouse) this.events.emitToHouse(houseId, 'chore:missed', { assignmentIds });
+    const outbox = this.events.outbox();
+    for (const [houseId, assignmentIds] of byHouse) outbox.toHouse(houseId, 'chore:missed', { assignmentIds });
+    outbox.flush();
     await this.checkMissedStreaks(rows, now);
     return rows.length;
   }
@@ -131,7 +132,9 @@ export class ChoreCronService implements OnApplicationBootstrap {
       if (already > 0) continue;
       await this.audit.log(r.houseId, null, 'MISSED_STREAK', { assigneeId: r.assigneeId, streak: MISSED_STREAK }, { assignmentId: latest.id });
       const admins = await this.prisma.houseMember.findMany({ where: { houseId: r.houseId, role: 'ADMIN', leftAt: null }, select: { userId: true } });
-      for (const a of admins) this.events.emitToUser(a.userId, 'chore:missed', { houseId: r.houseId, assigneeId: r.assigneeId, streak: MISSED_STREAK });
+      const outbox = this.events.outbox();
+      for (const a of admins) outbox.toUser(a.userId, 'chore:missed', { houseId: r.houseId, assigneeId: r.assigneeId, streak: MISSED_STREAK }, { houseId: r.houseId });
+      outbox.flush();
     }
   }
 
@@ -152,16 +155,12 @@ export class ChoreCronService implements OnApplicationBootstrap {
       SET status = 'DONE', "verifyMode" = 'AUTO_APPROVED', "verifiedAt" = ${at}::timestamp, "updatedAt" = (now() AT TIME ZONE 'UTC')
       FROM due WHERE c.id = due.id
       RETURNING c.id, c."houseId", c."assigneeId", c."weekKey"`);
+    const outbox = this.events.outbox();
     for (const r of rows) {
-      this.events.emitToHouse(r.houseId, 'chore:verified', {
-        assignmentId: r.id,
-        weekKey: r.weekKey,
-        assigneeId: r.assigneeId,
-        status: 'DONE',
-        verifyMode: 'AUTO_APPROVED',
-      });
+      outbox.toHouse(r.houseId, 'chore:verified', { assignmentId: r.id, weekKey: r.weekKey, assigneeId: r.assigneeId, status: 'DONE', verifyMode: 'AUTO_APPROVED' });
       await this.audit.log(r.houseId, null, 'AUTO_APPROVE', { afterHours: AUTO_APPROVE_HOURS }, { assignmentId: r.id });
     }
+    outbox.flush();
     return rows.length;
   }
 

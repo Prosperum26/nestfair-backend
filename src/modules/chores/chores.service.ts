@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { Chore } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { actorOfMember } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { AuditService } from './audit.service.js';
 import { normalizeChore } from './chore-rules.js';
@@ -73,7 +74,7 @@ export class ChoresService {
     if (Object.keys(changed).length > 0) await this.audit.log(houseId, actorMemberId, 'CHORE_UPDATED', { choreId, changed });
 
     if (row.isActive && !updated.isActive) {
-      const cancelled = await this.cancelFutureSlots(houseId, choreId, now);
+      const cancelled = await this.cancelFutureSlots(houseId, actorMemberId, choreId, now);
       await this.audit.log(houseId, actorMemberId, 'CHORE_DEACTIVATED', { choreId, cancelled: cancelled.length });
     } else if (!row.isActive && updated.isActive) {
       await this.audit.log(houseId, actorMemberId, 'CHORE_ACTIVATED', { choreId });
@@ -82,7 +83,7 @@ export class ChoresService {
   }
 
   /** S-28: tắt việc thì ca TODO / chưa có người ở tương lai thành CANCELLED (lịch sử giữ nguyên). */
-  private async cancelFutureSlots(houseId: string, choreId: string, now: Date): Promise<string[]> {
+  private async cancelFutureSlots(houseId: string, actorMemberId: string, choreId: string, now: Date): Promise<string[]> {
     const where = {
       houseId,
       choreId,
@@ -92,7 +93,10 @@ export class ChoresService {
     const ids = (await this.prisma.choreAssignment.findMany({ where, select: { id: true } })).map((r) => r.id);
     if (ids.length === 0) return [];
     await this.prisma.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED' } });
-    this.events.emitToHouse(houseId, 'chore:cancelled', { choreId, assignmentIds: ids });
+    this.events
+      .outbox()
+      .toHouse(houseId, 'chore:cancelled', { choreId, assignmentIds: ids }, await actorOfMember(this.prisma, actorMemberId))
+      .flush();
     return ids;
   }
 }

@@ -3,6 +3,7 @@ import { coded } from '../../common/coded-exception.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { AssignmentStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { actorOfUser } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { loadAssignmentForUser } from './assignment-access.js';
 import { ASSIGNMENT_INCLUDE, toAssignmentDto } from './assignment.mapper.js';
@@ -64,15 +65,22 @@ export class VerifyService {
     if (count === 0) throw this.stateChanged('Ca này vừa được người khác xử lý.');
 
     const row = await this.fetch(assignment.id);
-    this.events.emitToHouse(row.houseId, 'chore:verified', {
-      assignmentId: row.id,
-      weekKey: row.weekKey,
-      assigneeId: row.assigneeId,
-      verifiedById: membership.id,
-      status: row.status,
-      verifyMode: row.verifyMode,
-      disputed: row.disputed,
-    });
+    const outbox = this.events.outbox();
+    outbox.toHouse(
+      row.houseId,
+      'chore:verified',
+      {
+        assignmentId: row.id,
+        weekKey: row.weekKey,
+        assigneeId: row.assigneeId,
+        verifiedById: membership.id,
+        status: row.status,
+        verifyMode: row.verifyMode,
+        disputed: row.disputed,
+      },
+      await actorOfUser(this.prisma, userId),
+    );
+    outbox.flush();
     return toAssignmentDto(row);
   }
 
@@ -86,7 +94,15 @@ export class VerifyService {
     await this.prisma.choreAssignment.updateMany({ where: { id: assignment.id, status: 'REJECTED' }, data: { disputed: true } });
     await this.audit.log(assignment.houseId, membership.id, 'APPEAL', { rejectReason: assignment.rejectReason }, { assignmentId: assignment.id });
     const row = await this.fetch(assignment.id);
-    this.events.emitToHouse(row.houseId, 'chore:verified', { assignmentId: row.id, weekKey: row.weekKey, assigneeId: row.assigneeId, status: row.status, disputed: true });
+    this.events
+      .outbox()
+      .toHouse(
+        row.houseId,
+        'chore:verified',
+        { assignmentId: row.id, weekKey: row.weekKey, assigneeId: row.assigneeId, status: row.status, disputed: true },
+        await actorOfUser(this.prisma, userId),
+      )
+      .flush();
     return toAssignmentDto(row);
   }
 
@@ -152,9 +168,12 @@ export class VerifyService {
       { assignmentId: assignment.id },
     );
     const common = { assignmentId: row.id, weekKey: row.weekKey, assigneeId: row.assigneeId };
-    if (dto.action === 'REASSIGN') this.events.emitToHouse(row.houseId, 'chore:reassigned', { ...common, assignmentIds: [row.id] });
-    else if (dto.action === 'CANCEL') this.events.emitToHouse(row.houseId, 'chore:cancelled', { ...common, assignmentIds: [row.id] });
-    else this.events.emitToHouse(row.houseId, 'chore:verified', { ...common, status: row.status, verifyMode: row.verifyMode, disputed: row.disputed });
+    const actor = await actorOfUser(this.prisma, userId);
+    const outbox = this.events.outbox();
+    if (dto.action === 'REASSIGN') outbox.toHouse(row.houseId, 'chore:reassigned', { ...common, assignmentIds: [row.id] }, actor);
+    else if (dto.action === 'CANCEL') outbox.toHouse(row.houseId, 'chore:cancelled', { ...common, assignmentIds: [row.id] }, actor);
+    else outbox.toHouse(row.houseId, 'chore:verified', { ...common, status: row.status, verifyMode: row.verifyMode, disputed: row.disputed }, actor);
+    outbox.flush();
     return toAssignmentDto(row);
   }
 }

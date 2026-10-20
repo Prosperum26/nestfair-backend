@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { HouseMembership } from '../houses/guards/house-member.guard.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { actorOfMember } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { ASSIGNMENT_INCLUDE, toAssignmentDto, toScheduleMeta } from './assignment.mapper.js';
 import type { PreviewResultDto, ShuffleResultDto, WeekViewDto } from './dto/assignment-response.dto.js';
@@ -68,11 +69,15 @@ export class AssignmentsService {
     }
     const view = await this.view(houseId, weekStart, now);
     if (changed && view.schedule) {
-      this.events.emitToHouse(houseId, 'chore:shuffled', {
-        weekKey: view.schedule.weekKey,
-        relaxed: view.schedule.relaxed,
-        reasons: view.schedule.reasons,
-      });
+      this.events
+        .outbox()
+        .toHouse(
+          houseId,
+          'chore:shuffled',
+          { weekKey: view.schedule.weekKey, relaxed: view.schedule.relaxed, reasons: view.schedule.reasons },
+          await actorOfMember(this.prisma, actor.id),
+        )
+        .flush();
     }
     return { changed, message, schedule: view.schedule, assignments: view.assignments };
   }

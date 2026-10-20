@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { actorOfMember } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { AuditService } from './audit.service.js';
 import { assertDateRange } from './date-range.js';
@@ -42,9 +43,10 @@ export class BreaksService {
       occurrenceDate: { gte: dateOf(dto.startDate), lte: dateOf(dto.endDate) },
     };
     const ids = (await this.prisma.choreAssignment.findMany({ where, select: { id: true } })).map((r) => r.id);
+    const outbox = this.events.outbox();
     if (ids.length > 0) {
       await this.prisma.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED' } });
-      this.events.emitToHouse(houseId, 'chore:cancelled', { breakId: row.id, assignmentIds: ids });
+      outbox.toHouse(houseId, 'chore:cancelled', { breakId: row.id, assignmentIds: ids }, await actorOfMember(this.prisma, actorMemberId));
     }
     await this.audit.log(houseId, actorMemberId, 'BREAK_CREATED', {
       breakId: row.id,
@@ -53,6 +55,7 @@ export class BreaksService {
       reason: dto.reason ?? null,
       cancelled: ids.length,
     });
+    outbox.flush();
     return toDto(row);
   }
 
