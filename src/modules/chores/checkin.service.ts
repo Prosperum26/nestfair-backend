@@ -55,7 +55,7 @@ export class CheckinService {
     }
 
     const house = await this.prisma.house.findUniqueOrThrow({ where: { id: assignment.houseId }, select: { choreGraceHours: true } });
-    if (now < openAtOf(dsOf(assignment.occurrenceDate))) {
+    if (now < openAtOf(dsOf(assignment.occurrenceDate)) || (assignment.wheelLog && now < assignment.wheelLog.revealAt)) {
       throw coded(HttpStatus.UNPROCESSABLE_ENTITY, 'CHECKIN_NOT_OPEN', 'Chưa tới ngày làm nên chưa nộp ảnh được.');
     }
     if (now.getTime() > assignment.dueAt.getTime() + house.choreGraceHours * HOUR) {

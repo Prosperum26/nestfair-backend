@@ -2,7 +2,7 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import { coded } from '../../common/coded-exception.js';
 import type { WeekSchedule } from '../../generated/prisma/client.js';
-import type { GeneratedBy, HouseRole } from '../../generated/prisma/enums.js';
+import type { AssignmentSource, GeneratedBy, HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { EventsService } from '../events/events.service.js';
 import { generateWeek, type GenResult } from './algorithms/schedule-generator.js';
@@ -238,7 +238,7 @@ export class ScheduleService {
   /** Giao lại các ca TODO `slots` (đã lọc) cho người đủ điều kiện; không ai nhận được thì UNASSIGNED. */
   private async reassignSlots(
     houseId: string,
-    slots: { id: string; choreId: string; assigneeId: string | null; weekStart: Date; occurrenceDate: Date; weightSnapshot: number }[],
+    slots: { id: string; choreId: string; assigneeId: string | null; weekStart: Date; occurrenceDate: Date; weightSnapshot: number; source: AssignmentSource }[],
     kind: 'ORPHAN' | 'ABSENCE',
   ): Promise<{ moved: number; unassigned: number }> {
     if (slots.length === 0) return { moved: 0, unassigned: 0 };
@@ -272,7 +272,10 @@ export class ScheduleService {
         const pool = underCap.length > 0 ? underCap : avail;
         const preferred = pool.filter((m) => !fenced.has(`${m}|${o.choreId}`));
         const pick = (preferred.length > 0 ? preferred : pool).sort((a, b) => load[a] - load[b])[0];
-        const data = pick ? { assigneeId: pick, source: 'REASSIGN' as const } : { assigneeId: null, status: 'UNASSIGNED' as const };
+        // Ca vòng quay giữ nguồn WHEEL để vẫn không tính tải sau khi giao lại.
+        const data = pick
+          ? { assigneeId: pick, source: o.source === 'WHEEL' ? ('WHEEL' as const) : ('REASSIGN' as const) }
+          : { assigneeId: null, status: 'UNASSIGNED' as const };
         const { count } = await this.prisma.choreAssignment.updateMany({ where: { id: o.id, status: 'TODO', assigneeId: o.assigneeId }, data });
         if (count === 0) continue;
         touched.push(o.id);

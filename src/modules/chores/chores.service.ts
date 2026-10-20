@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import { coded } from '../../common/coded-exception.js';
 import type { Chore } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ActivityService } from '../activity/activity.service.js';
@@ -35,7 +36,8 @@ export class ChoresService {
 
   async list(houseId: string, includeInactive = false): Promise<ChoreDto[]> {
     const rows = await this.prisma.chore.findMany({
-      where: { houseId, ...(includeInactive ? {} : { isActive: true }) },
+      // Việc hệ thống ("Việc đột xuất" của vòng quay) không hiện ở danh sách / màn cài đặt.
+      where: { houseId, isSystem: false, ...(includeInactive ? {} : { isActive: true }) },
       orderBy: { createdAt: 'asc' },
     });
     return rows.map(toDto);
@@ -57,6 +59,7 @@ export class ChoresService {
   ): Promise<ChoreDto> {
     const row = await this.prisma.chore.findFirst({ where: { id: choreId, houseId } });
     if (!row) throw new NotFoundException('Không tìm thấy việc này.');
+    if (row.isSystem) throw coded(HttpStatus.FORBIDDEN, 'SYSTEM_CHORE', 'Đây là việc hệ thống của vòng quay, không sửa hay tắt được.');
 
     const shape = normalizeChore({
       frequency: dto.frequency ?? row.frequency,

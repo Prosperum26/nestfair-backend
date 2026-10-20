@@ -27,6 +27,7 @@ export class AssignmentDto {
   @ApiProperty() dueAt: Date;
   @ApiProperty({ enum: AssignmentStatus, enumName: 'AssignmentStatus' }) status: AssignmentStatus;
   @ApiProperty({ enum: AssignmentSource, enumName: 'AssignmentSource' }) source: AssignmentSource;
+  @ApiProperty({ format: 'uuid', nullable: true, type: String, description: 'Vòng quay sinh ra ca này (source = WHEEL)' }) wheelSpinId: string | null;
   @ApiProperty({ type: String, nullable: true }) proofImageUrl: string | null;
   @ApiProperty({ type: Date, nullable: true }) submittedAt: Date | null;
   @ApiProperty({ description: 'Nộp trong khoảng ân hạn sau hạn' }) isLate: boolean;

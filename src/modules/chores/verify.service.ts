@@ -153,7 +153,7 @@ export class VerifyService {
         if (!target) throw coded(HttpStatus.BAD_REQUEST, 'NOT_ELIGIBLE_ASSIGNEE', 'Người nhận ca không còn ở trong nhà.');
         data = {
           assigneeId: target.id,
-          source: 'REASSIGN',
+          source: assignment.source === 'WHEEL' ? 'WHEEL' : 'REASSIGN',
           status: 'TODO',
           proofImageUrl: null,
           proofHash: null,

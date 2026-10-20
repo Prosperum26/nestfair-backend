@@ -33,7 +33,8 @@ export class AssignmentsService {
     const [sched, rows] = await Promise.all([
       this.prisma.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } }),
       this.prisma.choreAssignment.findMany({
-        where: { houseId, weekStart: dateOf(weekStart) },
+        // Ca vòng quay chỉ hiện khi bánh xe đã dừng (không lộ kết quả trước animation).
+        where: { houseId, weekStart: dateOf(weekStart), OR: [{ wheelLog: { is: null } }, { wheelLog: { is: { revealAt: { lte: now } } } }] },
         include: ASSIGNMENT_INCLUDE,
         orderBy: [{ occurrenceDate: 'asc' }, { dueAt: 'asc' }, { titleSnapshot: 'asc' }],
       }),
