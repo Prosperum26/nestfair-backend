@@ -28,6 +28,9 @@ export interface PreviewResult {
 
 const randomSeed = () => randomInt(1, 2 ** 31 - 1);
 
+/** Gọi trong cùng transaction khi một lịch vừa được tạo / xáo lại (vd. ghi Live Ticker). */
+export type OnScheduleChanged = (tx: Db, schedule: WeekSchedule) => Promise<void>;
+
 @Injectable()
 export class ScheduleService {
   private readonly logger = new Logger(ScheduleService.name);
@@ -63,23 +66,33 @@ export class ScheduleService {
     weekStart: DateStr,
     by: GeneratedBy,
     now: Date = new Date(),
+    onCreated?: OnScheduleChanged,
   ): Promise<{ schedule: WeekSchedule; created: boolean }> {
     this.checkRange(weekStart, now);
     return this.withHouseLock(houseId, async (tx) => {
       const existing = await tx.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } });
       if (existing) return { schedule: existing, created: false };
-      return { schedule: await this.generateAndStore(tx, houseId, weekStart, by, randomSeed(), now), created: true };
+      const schedule = await this.generateAndStore(tx, houseId, weekStart, by, randomSeed(), now);
+      await onCreated?.(tx, schedule);
+      return { schedule, created: true };
     });
   }
 
   /** "Tạo lịch tuần này": có lịch rồi thì trả lịch cũ (S-34); lịch EMPTY thì sinh lại (vừa thêm việc). */
-  async createSchedule(houseId: string, weekStart: DateStr, now: Date = new Date()): Promise<{ schedule: WeekSchedule; created: boolean }> {
+  async createSchedule(
+    houseId: string,
+    weekStart: DateStr,
+    now: Date = new Date(),
+    onCreated?: OnScheduleChanged,
+  ): Promise<{ schedule: WeekSchedule; created: boolean }> {
     this.checkRange(weekStart, now);
     return this.withHouseLock(houseId, async (tx) => {
       const existing = await tx.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } });
       if (existing && existing.status !== 'EMPTY') return { schedule: existing, created: false };
       if (existing) await tx.weekSchedule.delete({ where: { id: existing.id } });
-      return { schedule: await this.generateAndStore(tx, houseId, weekStart, 'USER', randomSeed(), now), created: true };
+      const schedule = await this.generateAndStore(tx, houseId, weekStart, 'USER', randomSeed(), now);
+      await onCreated?.(tx, schedule);
+      return { schedule, created: true };
     });
   }
 
@@ -118,6 +131,7 @@ export class ScheduleService {
     weekStart: DateStr,
     actor: { memberId: string; role: HouseRole },
     now: Date = new Date(),
+    onRerolled?: OnScheduleChanged,
   ): Promise<{ changed: boolean; schedule: WeekSchedule; message?: string }> {
     if (actor.role !== 'ADMIN') throw coded(HttpStatus.FORBIDDEN, 'ADMIN_ONLY', 'Chỉ trưởng phòng mới xáo lại được lịch.');
     return this.withHouseLock(houseId, async (tx) => {
@@ -156,6 +170,7 @@ export class ScheduleService {
       });
       await storeSlots(tx, houseId, updated, ctx, accepted.res.slots);
       await this.audit.log(houseId, actor.memberId, 'REROLL', { weekKey: updated.weekKey, oldSeed: sched.seed, newSeed: accepted.seed }, { scheduleId: sched.id }, tx);
+      await onRerolled?.(tx, updated);
       return { changed: true, schedule: updated };
     });
   }

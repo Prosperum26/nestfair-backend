@@ -168,7 +168,7 @@ describe('Check-in (e2e)', () => {
 
   it('DB lỗi sau khi upload → xóa ảnh vừa up (không để ảnh mồ côi), ca vẫn TODO', async () => {
     const { users, assignment } = await assignmentIn(fx, ['Hùng', 'Thiện']);
-    vi.spyOn(fx.prisma.choreAssignment, 'updateMany').mockRejectedValueOnce(new Error('db down'));
+    vi.spyOn(fx.prisma, '$transaction').mockRejectedValueOnce(new Error('db down'));
     await checkin(users[1].token, assignment.id, ok()).expect(500);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect((await row(assignment.id)).status).toBe('TODO');

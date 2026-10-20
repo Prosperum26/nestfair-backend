@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { Chore } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ActivityService } from '../activity/activity.service.js';
 import { actorOfMember } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { AuditService } from './audit.service.js';
@@ -29,6 +30,7 @@ export class ChoresService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly events: EventsService,
+    private readonly activity: ActivityService,
   ) {}
 
   async list(houseId: string, includeInactive = false): Promise<ChoreDto[]> {
@@ -74,29 +76,35 @@ export class ChoresService {
     if (Object.keys(changed).length > 0) await this.audit.log(houseId, actorMemberId, 'CHORE_UPDATED', { choreId, changed });
 
     if (row.isActive && !updated.isActive) {
-      const cancelled = await this.cancelFutureSlots(houseId, actorMemberId, choreId, now);
-      await this.audit.log(houseId, actorMemberId, 'CHORE_DEACTIVATED', { choreId, cancelled: cancelled.length });
+      await this.deactivate(houseId, actorMemberId, updated, now);
     } else if (!row.isActive && updated.isActive) {
       await this.audit.log(houseId, actorMemberId, 'CHORE_ACTIVATED', { choreId });
     }
     return toDto(updated);
   }
 
-  /** S-28: tắt việc thì ca TODO / chưa có người ở tương lai thành CANCELLED (lịch sử giữ nguyên). */
-  private async cancelFutureSlots(houseId: string, actorMemberId: string, choreId: string, now: Date): Promise<string[]> {
+  /**
+   * S-28: tắt việc thì ca TODO / chưa có người ở tương lai thành CANCELLED (lịch sử giữ nguyên).
+   * Hủy ca, nhật ký và Live Ticker (một mục cho cả việc) ghi cùng một transaction.
+   */
+  private async deactivate(houseId: string, actorMemberId: string, chore: Chore, now: Date): Promise<void> {
     const where = {
       houseId,
-      choreId,
+      choreId: chore.id,
       status: { in: ['TODO', 'UNASSIGNED'] as ('TODO' | 'UNASSIGNED')[] },
       dueAt: { gt: now },
     };
-    const ids = (await this.prisma.choreAssignment.findMany({ where, select: { id: true } })).map((r) => r.id);
-    if (ids.length === 0) return [];
-    await this.prisma.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED' } });
-    this.events
-      .outbox()
-      .toHouse(houseId, 'chore:cancelled', { choreId, assignmentIds: ids }, await actorOfMember(this.prisma, actorMemberId))
-      .flush();
-    return ids;
+    const actor = await actorOfMember(this.prisma, actorMemberId);
+    const outbox = this.events.outbox();
+    await this.prisma.$transaction(async (tx) => {
+      const ids = (await tx.choreAssignment.findMany({ where, select: { id: true } })).map((r) => r.id);
+      if (ids.length > 0) {
+        await tx.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED' } });
+        outbox.toHouse(houseId, 'chore:cancelled', { choreId: chore.id, assignmentIds: ids }, actor);
+      }
+      await this.audit.log(houseId, actorMemberId, 'CHORE_DEACTIVATED', { choreId: chore.id, cancelled: ids.length }, {}, tx);
+      await this.activity.record(tx, outbox, { houseId, type: 'chore.paused', actor, params: { choreId: chore.id, choreTitle: chore.title, cancelled: ids.length } });
+    });
+    outbox.flush();
   }
 }

@@ -3,6 +3,7 @@ import { coded } from '../../common/coded-exception.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { AssignmentStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ActivityService, type ActivityType } from '../activity/activity.service.js';
 import { actorOfUser } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { loadAssignmentForUser } from './assignment-access.js';
@@ -29,10 +30,16 @@ export class VerifyService {
     private readonly prisma: PrismaService,
     private readonly events: EventsService,
     private readonly audit: AuditService,
+    private readonly activity: ActivityService,
   ) {}
 
   private fetch(id: string) {
     return this.prisma.choreAssignment.findUniqueOrThrow({ where: { id }, include: ASSIGNMENT_INCLUDE });
+  }
+
+  /** Người làm ca (để client ghép câu "… ca Đổ rác của Mai"). */
+  private target(a: { assignee: { userId: string; user: { fullName: string } } | null }) {
+    return { targetUserId: a.assignee?.userId ?? null, targetName: a.assignee?.user.fullName ?? null };
   }
 
   private stateChanged(message = 'Ca này không còn ở trạng thái phù hợp, hãy tải lại.') {
@@ -61,11 +68,21 @@ export class VerifyService {
           verifiedAt: now,
           verifyMode: 'PEER',
         };
-    const { count } = await this.prisma.choreAssignment.updateMany({ where: { id: assignment.id, status: 'PENDING_VERIFY' }, data });
-    if (count === 0) throw this.stateChanged('Ca này vừa được người khác xử lý.');
+    const actor = await actorOfUser(this.prisma, userId);
+    const outbox = this.events.outbox();
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.choreAssignment.updateMany({ where: { id: assignment.id, status: 'PENDING_VERIFY' }, data });
+      if (count === 0) throw this.stateChanged('Ca này vừa được người khác xử lý.');
+      // Không kèm lý do từ chối lên ticker (mục 10.3).
+      await this.activity.record(tx, outbox, {
+        houseId: assignment.houseId,
+        type: approved ? 'chore.verified' : 'chore.rejected',
+        actor,
+        params: { assignmentId: assignment.id, choreTitle: assignment.titleSnapshot, ...this.target(assignment) },
+      });
+    });
 
     const row = await this.fetch(assignment.id);
-    const outbox = this.events.outbox();
     outbox.toHouse(
       row.houseId,
       'chore:verified',
@@ -78,7 +95,7 @@ export class VerifyService {
         verifyMode: row.verifyMode,
         disputed: row.disputed,
       },
-      await actorOfUser(this.prisma, userId),
+      actor,
     );
     outbox.flush();
     return toAssignmentDto(row);
@@ -156,20 +173,32 @@ export class VerifyService {
         break;
     }
 
-    const { count } = await this.prisma.choreAssignment.updateMany({ where: { id: assignment.id, status: assignment.status }, data });
-    if (count === 0) throw this.stateChanged('Ca này vừa được người khác xử lý.');
-
-    const row = await this.fetch(assignment.id);
-    await this.audit.log(
-      assignment.houseId,
-      membership.id,
-      `OVERRIDE_${dto.action}`,
-      { from: assignment.status, to: row.status, reason: dto.reason, toUserId: dto.userId ?? null },
-      { assignmentId: assignment.id },
-    );
-    const common = { assignmentId: row.id, weekKey: row.weekKey, assigneeId: row.assigneeId };
     const actor = await actorOfUser(this.prisma, userId);
     const outbox = this.events.outbox();
+    const toName = dto.action === 'REASSIGN' ? (await actorOfUser(this.prisma, dto.userId!)).name : null;
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.choreAssignment.updateMany({ where: { id: assignment.id, status: assignment.status }, data });
+      if (count === 0) throw this.stateChanged('Ca này vừa được người khác xử lý.');
+      const to = await tx.choreAssignment.findUniqueOrThrow({ where: { id: assignment.id }, select: { status: true } });
+      await this.audit.log(
+        assignment.houseId,
+        membership.id,
+        `OVERRIDE_${dto.action}`,
+        { from: assignment.status, to: to.status, reason: dto.reason, toUserId: dto.userId ?? null },
+        { assignmentId: assignment.id },
+        tx,
+      );
+      // Luôn lên ticker (TK-06); lý do chỉ xem ở nhật ký.
+      await this.activity.record(tx, outbox, {
+        houseId: assignment.houseId,
+        type: `override.${dto.action.toLowerCase()}` as ActivityType,
+        actor,
+        params: { assignmentId: assignment.id, choreTitle: assignment.titleSnapshot, ...this.target(assignment), toName },
+      });
+    });
+
+    const row = await this.fetch(assignment.id);
+    const common = { assignmentId: row.id, weekKey: row.weekKey, assigneeId: row.assigneeId };
     if (dto.action === 'REASSIGN') outbox.toHouse(row.houseId, 'chore:reassigned', { ...common, assignmentIds: [row.id] }, actor);
     else if (dto.action === 'CANCEL') outbox.toHouse(row.houseId, 'chore:cancelled', { ...common, assignmentIds: [row.id] }, actor);
     else outbox.toHouse(row.houseId, 'chore:verified', { ...common, status: row.status, verifyMode: row.verifyMode, disputed: row.disputed }, actor);

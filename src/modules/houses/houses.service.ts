@@ -7,6 +7,7 @@ import {
 import { Prisma } from '../../generated/prisma/client.js';
 import type { HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ActivityService } from '../activity/activity.service.js';
 import { actorOfUser } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import type { CreateHouseDto } from './dto/create-house.dto.js';
@@ -29,6 +30,7 @@ export class HousesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventsService,
+    private readonly activity: ActivityService,
   ) {}
 
   /** Tạo nhà, người tạo là trưởng phòng (ADMIN). */
@@ -54,6 +56,8 @@ export class HousesService {
    * không bị vượt khi nhiều người cùng vào lúc nhà còn 1 chỗ.
    */
   async join(userId: string, inviteCode: string): Promise<HouseDetailDto> {
+    const actor = await actorOfUser(this.prisma, userId);
+    const outbox = this.events.outbox();
     const houseId = await this.prisma
       .$transaction(async (tx) => {
         const [house] = await tx.$queryRaw<
@@ -80,6 +84,12 @@ export class HousesService {
         await tx.houseMember.create({
           data: { houseId: house.id, userId, role: 'ROOMMATE' },
         });
+        await this.activity.record(tx, outbox, {
+          houseId: house.id,
+          type: 'member.joined',
+          actor,
+          params: {},
+        });
         return house.id;
       })
       .catch((error: unknown) => {
@@ -91,9 +101,8 @@ export class HousesService {
       });
 
     // Sau commit: socket đang mở của người mới vào room nhà, cả nhà nhận member:joined.
-    const actor = await actorOfUser(this.prisma, userId);
     await this.events.addMemberToHouse(userId, houseId);
-    this.events.outbox().toHouse(houseId, 'member:joined', { userId, name: actor.name }, actor).flush();
+    outbox.toHouse(houseId, 'member:joined', { userId, name: actor.name }, actor).flush();
     return this.detail(houseId, 'ROOMMATE');
   }
 

@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ActivityService } from '../activity/activity.service.js';
 import { actorOfMember } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { AuditService } from './audit.service.js';
@@ -21,6 +22,7 @@ export class BreaksService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly events: EventsService,
+    private readonly activity: ActivityService,
   ) {}
 
   async list(houseId: string): Promise<BreakDto[]> {
@@ -34,26 +36,38 @@ export class BreaksService {
    */
   async create(houseId: string, actorMemberId: string, actorUserId: string, dto: CreateBreakDto): Promise<BreakDto> {
     assertDateRange(dto.startDate, dto.endDate);
-    const row = await this.prisma.houseBreak.create({
-      data: { houseId, startDate: dateOf(dto.startDate), endDate: dateOf(dto.endDate), reason: dto.reason, createdById: actorUserId },
-    });
-    const where = {
-      houseId,
-      status: { in: ['TODO', 'UNASSIGNED'] as ('TODO' | 'UNASSIGNED')[] },
-      occurrenceDate: { gte: dateOf(dto.startDate), lte: dateOf(dto.endDate) },
-    };
-    const ids = (await this.prisma.choreAssignment.findMany({ where, select: { id: true } })).map((r) => r.id);
+    const actor = await actorOfMember(this.prisma, actorMemberId);
     const outbox = this.events.outbox();
-    if (ids.length > 0) {
-      await this.prisma.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED' } });
-      outbox.toHouse(houseId, 'chore:cancelled', { breakId: row.id, assignmentIds: ids }, await actorOfMember(this.prisma, actorMemberId));
-    }
-    await this.audit.log(houseId, actorMemberId, 'BREAK_CREATED', {
-      breakId: row.id,
-      startDate: dto.startDate,
-      endDate: dto.endDate,
-      reason: dto.reason ?? null,
-      cancelled: ids.length,
+    const row = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.houseBreak.create({
+        data: { houseId, startDate: dateOf(dto.startDate), endDate: dateOf(dto.endDate), reason: dto.reason, createdById: actorUserId },
+      });
+      const where = {
+        houseId,
+        status: { in: ['TODO', 'UNASSIGNED'] as ('TODO' | 'UNASSIGNED')[] },
+        occurrenceDate: { gte: dateOf(dto.startDate), lte: dateOf(dto.endDate) },
+      };
+      const ids = (await tx.choreAssignment.findMany({ where, select: { id: true } })).map((r) => r.id);
+      if (ids.length > 0) {
+        await tx.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED' } });
+        outbox.toHouse(houseId, 'chore:cancelled', { breakId: created.id, assignmentIds: ids }, actor);
+      }
+      await this.audit.log(
+        houseId,
+        actorMemberId,
+        'BREAK_CREATED',
+        { breakId: created.id, startDate: dto.startDate, endDate: dto.endDate, reason: dto.reason ?? null, cancelled: ids.length },
+        {},
+        tx,
+      );
+      // Một mục cho cả khoảng nghỉ; không kèm lý do.
+      await this.activity.record(tx, outbox, {
+        houseId,
+        type: 'break.created',
+        actor,
+        params: { startDate: dto.startDate, endDate: dto.endDate, cancelled: ids.length },
+      });
+      return created;
     });
     outbox.flush();
     return toDto(row);
