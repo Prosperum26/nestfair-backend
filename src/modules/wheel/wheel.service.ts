@@ -154,8 +154,10 @@ export class WheelService implements OnApplicationBootstrap, OnModuleDestroy {
         const again = await this.findReplay(tx, m, idempotencyKey);
         if (again) return { created: false, log: again };
 
+        // So với `now` lúc request tới (chụp trước khi chờ khóa): vòng kia có thể đã REVEALED trong lúc chờ,
+        // nhưng request vẫn tới khi bánh xe đang quay nên vẫn tính là bận. Vòng bị hủy thì không chặn.
         const busy = await tx.luckyWheelLog.findFirst({
-          where: { houseId: m.houseId, status: 'SPINNING', revealAt: { gt: now } },
+          where: { houseId: m.houseId, status: { not: 'VOIDED' }, revealAt: { gt: now } },
           orderBy: { revealAt: 'desc' },
         });
         if (busy) {

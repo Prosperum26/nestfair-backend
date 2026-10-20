@@ -27,6 +27,11 @@ describe('Lucky Wheel (e2e)', () => {
     return key ? req.set('Idempotency-Key', key) : req;
   };
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  /** Tua tới hết vòng (không chờ animation): đưa revealAt về quá khứ rồi công bố, như timer chạy đúng giờ. */
+  const finish = async (spinId: string) => {
+    await fx.prisma.luckyWheelLog.update({ where: { id: spinId }, data: { revealAt: new Date(Date.now() - 1000) } });
+    await wheel.reveal(spinId);
+  };
   const house4 = () => fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
 
   it('D-2 / D-3: server chọn người trúng, ghi đúng 1 log + 1 ca WHEEL, commit trước khi phát wheel:spinning', async () => {
@@ -96,6 +101,27 @@ describe('Lucky Wheel (e2e)', () => {
     expect(await fx.prisma.choreAssignment.count({ where: { houseId: h.houseId, source: 'WHEEL' } })).toBe(1);
   });
 
+  it('T-LW-03: request tới khi vòng khác đang quay nhưng vào khóa sau revealAt vẫn WHEEL_BUSY', async () => {
+    const h = await house4();
+    const ids = h.users.map((u) => u.id);
+    const first = await spin(h.users[0].token, h.houseId, { taskTitle: 'Mua gas', participantIds: ids, dueAt: due() }).expect(201);
+    await sleep(wheel.durationMs + 600);
+    const log = await fx.prisma.luckyWheelLog.findUniqueOrThrow({ where: { id: first.body.spinId } });
+    expect(log.status).toBe('REVEALED');
+
+    // `now` là lúc request tới (giữa vòng đầu); lúc vào khóa thì vòng đầu đã công bố.
+    const arrivedAt = new Date(log.revealAt.getTime() - 100);
+    const member = await fx.prisma.houseMember.findFirstOrThrow({ where: { houseId: h.houseId, userId: h.users[1].id } });
+    const second = wheel.spin(
+      { id: member.id, houseId: h.houseId, userId: h.users[1].id, role: member.role },
+      { taskTitle: 'Đổ rác', participantIds: ids, dueAt: new Date(Date.now() + 2 * HOUR) },
+      randomUUID(),
+      arrivedAt,
+    );
+    await expect(second).rejects.toMatchObject({ response: { code: 'WHEEL_BUSY', retryAfterMs: 100, spinId: log.id } });
+    expect(await fx.prisma.luckyWheelLog.count({ where: { houseId: h.houseId } })).toBe(1);
+  });
+
   it('T-LW-04: cùng Idempotency-Key gửi 2 lần → 1 vòng, lần hai 200 trả kết quả cũ; thiếu key thì 400', async () => {
     const h = await house4();
     const body = { taskTitle: 'Mua nước', participantIds: [h.users[0].id, h.users[1].id], dueAt: due() };
@@ -147,7 +173,7 @@ describe('Lucky Wheel (e2e)', () => {
 
     // 5 vòng trong giờ qua (giả lập bằng DB để không chờ animation).
     const res = await spin(h.users[0].token, h.houseId, { taskTitle: 'Vòng một', participantIds: ids, dueAt: due() }).expect(201);
-    await wheel.reveal(res.body.spinId);
+    await finish(res.body.spinId);
     const tpl = await fx.prisma.luckyWheelLog.findUniqueOrThrow({ where: { id: res.body.spinId } });
     for (let i = 0; i < 4; i++) {
       const a = await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: tpl.assignmentId } });
@@ -164,7 +190,7 @@ describe('Lucky Wheel (e2e)', () => {
     const h = await house4();
     const ids = [h.users[0].id, h.users[1].id];
     const a = await spin(h.users[0].token, h.houseId, { taskTitle: 'Lần một', participantIds: ids, dueAt: due() }).expect(201);
-    await wheel.reveal(a.body.spinId);
+    await finish(a.body.spinId);
     await spin(h.users[0].token, h.houseId, { taskTitle: 'Lần hai', participantIds: ids, dueAt: due() }).expect(201);
     const system = await fx.prisma.chore.findMany({ where: { houseId: h.houseId, isSystem: true } });
     expect(system).toHaveLength(1);
