@@ -7,6 +7,8 @@ import {
 import { Prisma } from '../../generated/prisma/client.js';
 import type { HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { actorOfUser } from '../events/actor.js';
+import { EventsService } from '../events/events.service.js';
 import type { CreateHouseDto } from './dto/create-house.dto.js';
 import type {
   HouseDetailDto,
@@ -24,7 +26,10 @@ const isUniqueViolation = (error: unknown) =>
 
 @Injectable()
 export class HousesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: EventsService,
+  ) {}
 
   /** Tạo nhà, người tạo là trưởng phòng (ADMIN). */
   async create(userId: string, dto: CreateHouseDto): Promise<HouseDetailDto> {
@@ -85,6 +90,10 @@ export class HousesService {
         throw error;
       });
 
+    // Sau commit: socket đang mở của người mới vào room nhà, cả nhà nhận member:joined.
+    const actor = await actorOfUser(this.prisma, userId);
+    await this.events.addMemberToHouse(userId, houseId);
+    this.events.outbox().toHouse(houseId, 'member:joined', { userId, name: actor.name }, actor).flush();
     return this.detail(houseId, 'ROOMMATE');
   }
 
