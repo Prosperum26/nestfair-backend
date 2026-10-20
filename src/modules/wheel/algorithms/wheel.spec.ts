@@ -86,7 +86,7 @@ describe('pickLandingIndex', () => {
   it('chọn ngẫu nhiên giữa các lát của người trúng', () => {
     const slices = ['a', 'b', 'a', 'b', 'a', 'b'];
     const seen = new Set(Array.from({ length: 200 }, () => pickLandingIndex(slices, 'a')));
-    expect([...seen].sort()).toEqual([0, 2, 4]);
+    expect([...seen].sort((x, y) => x - y)).toEqual([0, 2, 4]);
   });
 
   it('người trúng không có lát thì ném lỗi', () => {

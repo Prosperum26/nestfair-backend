@@ -12,6 +12,7 @@ import { EventsModule } from './modules/events/events.module.js';
 import { HousesModule } from './modules/houses/houses.module.js';
 import { SchedulerModule } from './modules/scheduler/scheduler.module.js';
 import { UsersModule } from './modules/users/users.module.js';
+import { WheelModule } from './modules/wheel/wheel.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 
 @Module({
@@ -22,6 +23,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     UsersModule,
     HousesModule,
     ChoresModule,
+    WheelModule,
     EventsModule,
     ActivityModule,
     ScheduleModule.forRoot(),
