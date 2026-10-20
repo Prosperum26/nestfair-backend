@@ -83,6 +83,7 @@ model House {
   absences      MemberAbsence[]
   breaks        HouseBreak[]
   auditLogs     ChoreAuditLog[]
+  activities    HouseActivity[]
 
   @@map("houses")
 }
@@ -319,4 +320,32 @@ model ChoreAuditLog {
 
   @@index([houseId, createdAt])
   @@map("chore_audit_logs")
+}
+
+enum ActivityVisibility {
+  HOUSE
+  ADMIN_ONLY
+}
+
+/// Bảng tin hoạt động của nhà (Live Ticker). Ghi cùng transaction với nghiệp vụ, giữ 30 ngày.
+model HouseActivity {
+  id          String             @id @default(uuid()) @db.Uuid
+  houseId     String             @db.Uuid
+  /// 'chore.submitted', 'chore.verified', 'wheel.result', 'swap.accepted', ...
+  type        String
+  actorUserId String?            @db.Uuid
+  /// Tên chụp lúc xảy ra (người đã rời nhà vẫn hiện đúng).
+  actorName   String
+  /// Tham số để client ghép câu: choreTitle, targetName, count, weekKey, participantNames...
+  params      Json
+  visibility  ActivityVisibility @default(HOUSE)
+  /// Chống ghi hai lần cho cùng một sự kiện (retry, idempotency).
+  dedupeKey   String?
+  createdAt   DateTime           @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+
+  @@unique([houseId, dedupeKey])
+  @@index([houseId, createdAt])
+  @@map("house_activities")
 }
