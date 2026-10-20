@@ -256,6 +256,10 @@ model ChoreAssignment {
   disputed           Boolean          @default(false)
   /// Idempotency-Key của lần check-in gần nhất.
   checkinKey         String?
+  /// Khóa lạc quan, tăng khi đổi người hoặc đổi trạng thái (Issue #7).
+  version            Int              @default(0)
+  /// Yêu cầu đổi ca đã tạo ra `source` hiện tại, để truy vết (Issue #7).
+  swapRequestId      String?          @db.Uuid
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
@@ -398,4 +402,142 @@ model LuckyWheelLog {
   @@index([houseId, spunAt])
   @@index([status, revealAt])
   @@map("lucky_wheel_logs")
+}
+
+enum SwapType {
+  EXCHANGE
+  COVER
+  PERMANENT
+}
+
+enum SwapStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+enum Compensation {
+  PAYBACK
+  GIFT
+}
+
+enum DebtStatus {
+  OPEN
+  PAID
+  FORGIVEN
+  CANCELLED
+}
+
+enum SwapResolution {
+  ACCEPTED_BY_TARGET
+  REJECTED_BY_TARGET
+  CANCELLED_BY_REQUESTER
+  EXPIRED_NO_TAKER
+  ESCALATED
+  SLOT_CHANGED
+  REQUESTER_DID_IT
+  MEMBER_LEFT
+  CHORE_DISABLED
+  HOUSE_BREAK
+  ADMIN_OVERRIDE
+}
+
+/// Yêu cầu đổi ca. Mọi tham chiếu người dùng HouseMember.id (D15). CHECK viết tay trong migration.
+model ChoreSwapRequest {
+  id                 String          @id @default(uuid()) @db.Uuid
+  houseId            String          @db.Uuid
+  type               SwapType
+  /// HouseMember.id của người gửi (cùng quy ước với ChoreAssignment.assigneeId)
+  requesterMemberId  String          @db.Uuid
+  /// HouseMember.id của người nhận đích danh. null = Chợ ca (chỉ COVER)
+  targetMemberId     String?         @db.Uuid
+  fromAssignmentId   String?         @db.Uuid
+  toAssignmentId     String?         @db.Uuid
+  compensation       Compensation?
+  /// Ghi chú quà, tối đa 100 ký tự. Hiện được trên Chợ ca.
+  rewardNote         String?         @db.VarChar(100)
+  /// VNĐ, nguyên. Chỉ khi compensation = GIFT.
+  rewardAmount       Int?
+  /// Lý do riêng tư. Chỉ người gửi, người nhận và Admin thấy (D5). Không lên ticker.
+  reason             String?         @db.VarChar(200)
+  /// Lời nhắn gửi người nhận đích danh. Không hiện trên Chợ ca (D5).
+  note               String?         @db.VarChar(200)
+  status             SwapStatus      @default(PENDING)
+  resolution         SwapResolution?
+  expiresAt          DateTime
+  acceptedById       String?         @db.Uuid
+  acceptedAt         DateTime?
+  /// Idempotency-Key của lần accept thành công, để trả lại kết quả cũ khi bấm lại
+  acceptIdemKey      String?
+  /// Chuỗi leo thang: id của yêu cầu đầu tiên cùng một ca
+  rootRequestId      String          @db.Uuid
+  /// ADD_REWARD | RESEND | SELF | SELF_DEFAULT
+  escalationChoice   String?
+  /// = dueAt của ca − 1 giờ. Sau mốc này, mặc định SELF_DEFAULT
+  escalationDeadline DateTime?
+  /// Snapshot để tính tải và nợ, không đổi khi weight của việc đổi sau này
+  fromWeightSnapshot Int
+  toWeightSnapshot   Int?
+  /// Nợ cũ đã được cấn trừ bởi yêu cầu này (R-SWAP-7)
+  offsetDebtId       String?         @db.Uuid
+  version            Int             @default(0)
+  createdAt          DateTime        @default(now())
+
+  @@index([houseId, status, expiresAt])
+  @@index([rootRequestId])
+  @@map("chore_swap_requests")
+}
+
+/// Khóa một ca đang nằm trong yêu cầu PENDING (ở vai trò gửi hoặc đích).
+model SwapLock {
+  /// PK: một ca chỉ thuộc tối đa một yêu cầu PENDING (R-SWAP-1)
+  assignmentId  String @id @db.Uuid
+  swapRequestId String @db.Uuid
+
+  @@map("swap_locks")
+}
+
+/// Sổ nợ ca (làm bù). CHECK weight >= 1 trong migration.
+model ChoreDebt {
+  id                  String     @id @default(uuid()) @db.Uuid
+  houseId             String     @db.Uuid
+  /// HouseMember.id: người được làm hộ, đang nợ ca
+  debtorMemberId      String     @db.Uuid
+  /// HouseMember.id: người đã làm hộ, được làm bù
+  creditorMemberId    String     @db.Uuid
+  swapRequestId       String     @db.Uuid
+  /// Ca gốc được làm hộ. Nợ chỉ có hiệu lực khi ca này DONE (D7)
+  coverAssignmentId   String     @db.Uuid
+  /// fromWeightSnapshot của ca gốc, hoặc phần chênh sau cấn trừ. >= 1
+  weight              Int
+  status              DebtStatus @default(OPEN)
+  /// OFFSET | DEBTOR_LEFT | CREDITOR_LEFT | COVER_MISSED | ADMIN_REASSIGN | ABSENT_REASSIGN | STALE | FORGIVEN_BY_CREDITOR
+  closeReason         String?
+  pickOpensAt         DateTime?
+  pickDeadlineAt      DateTime?
+  pickAttempts        Int        @default(0)
+  paybackAssignmentId String?    @db.Uuid
+  createdAt           DateTime   @default(now())
+  settledAt           DateTime?
+
+  @@index([debtorMemberId, status])
+  @@index([creditorMemberId, status])
+  @@map("chore_debts")
+}
+
+/// Chỉ cho PERMANENT. Could, cắt đầu tiên nếu trễ.
+model RotationSwap {
+  id                 String   @id @default(uuid()) @db.Uuid
+  houseId            String   @db.Uuid
+  swapRequestId      String   @db.Uuid
+  userAMemberId      String   @db.Uuid
+  userBMemberId      String   @db.Uuid
+  effectiveWeekStart DateTime @db.Date
+  /// WAITING | APPLIED | FAILED | CANCELLED
+  status             String
+  failReason         String?
+
+  @@map("rotation_swaps")
 }
