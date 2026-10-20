@@ -69,6 +69,28 @@ const CHORES = [
 const SAMPLE_PROOF_URL = 'https://res.cloudinary.com/demo/image/upload/sample.jpg';
 
 /**
+ * Hai khoản chi tháng 10 có nguồn từ OCR hóa đơn (đặc tả: seed có 2 khoản chi từ OCR). Mỗi khoản có một
+ * ReceiptScan đã dùng, draftJson là JSON Gemini trả về; tổng các món bằng đúng tổng khoản chi nên không đổi số dư.
+ */
+const OCR_DRAFTS: Record<string, { merchant: string; items: { name: string; quantity: number; lineTotal: number }[] }> = {
+  'Đi chợ cuối tuần': {
+    merchant: 'Bách Hóa Xanh',
+    items: [
+      { name: 'Rau củ', quantity: 1, lineTotal: 180_000 },
+      { name: 'Thịt cá', quantity: 1, lineTotal: 240_000 },
+      { name: 'Trái cây', quantity: 1, lineTotal: 100_000 },
+    ],
+  },
+  'Nước rửa chén & giấy': {
+    merchant: 'Co.opmart',
+    items: [
+      { name: 'Nước rửa chén', quantity: 1, lineTotal: 45_000 },
+      { name: 'Giấy vệ sinh', quantity: 1, lineTotal: 75_000 },
+    ],
+  },
+};
+
+/**
  * Việc nhà theo Design.md mục 7: 6 việc, 4 người. Dùng chính thuật toán sinh lịch (seed cố định) cho
  * 3 tuần lịch sử (đã xong, có 1 ca MISSED), tuần này (có ca chờ duyệt, bị từ chối và bỏ ca để demo) và tuần sau
  * (đã công bố, chưa bắt đầu, còn xáo lại được). Xóa và tạo lại dữ liệu việc nhà của nhà demo mỗi lần chạy.
@@ -178,6 +200,8 @@ async function seedExpenses(houseId: string, users: Record<string, { id: string 
   const exact = (amounts: Record<string, number>) => Object.entries(amounts).map(([k, amount]) => ({ k, amount }));
 
   await prisma.settlement.deleteMany({ where: { houseId } });
+  // Xóa scan trước: khóa ngoại expenseId là SetNull nên scan cũ sẽ mồ côi nếu để lại khi chạy seed lần hai.
+  await prisma.receiptScan.deleteMany({ where: { houseId } });
   await prisma.expense.deleteMany({ where: { houseId } });
 
   const expenses = [
@@ -217,7 +241,7 @@ async function seedExpenses(houseId: string, users: Record<string, { id: string 
 
   for (const e of expenses) {
     const totalAmount = e.splits.reduce((sum, s) => sum + s.amount, 0);
-    await prisma.expense.create({
+    const created = await prisma.expense.create({
       data: {
         houseId,
         payerId: id(e.payer),
@@ -231,6 +255,21 @@ async function seedExpenses(houseId: string, users: Record<string, { id: string 
         splits: { create: e.splits.map((s) => ({ userId: id(s.k), allocatedAmount: s.amount })) },
       },
     });
+    const ocr = OCR_DRAFTS[e.title];
+    if (ocr) {
+      await prisma.receiptScan.create({
+        data: {
+          houseId,
+          scannedById: id(e.payer),
+          imageUrl: 'receiptImageUrl' in e ? e.receiptImageUrl : SAMPLE_PROOF_URL,
+          status: 'USED',
+          draftJson: { ...ocr, purchasedAt: e.date, total: totalAmount, warnings: [] },
+          model: 'seed',
+          latencyMs: 2100,
+          expenseId: created.id,
+        },
+      });
+    }
   }
 
   const settlements = [
