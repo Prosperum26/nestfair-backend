@@ -11,6 +11,7 @@ import { ChoresModule } from './modules/chores/chores.module.js';
 import { EventsModule } from './modules/events/events.module.js';
 import { HousesModule } from './modules/houses/houses.module.js';
 import { SchedulerModule } from './modules/scheduler/scheduler.module.js';
+import { SwapsModule } from './modules/swaps/swaps.module.js';
 import { UsersModule } from './modules/users/users.module.js';
 import { WheelModule } from './modules/wheel/wheel.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -24,6 +25,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     HousesModule,
     ChoresModule,
     WheelModule,
+    SwapsModule,
     EventsModule,
     ActivityModule,
     ScheduleModule.forRoot(),
