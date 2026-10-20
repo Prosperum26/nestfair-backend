@@ -12,7 +12,8 @@ import { PrismaClient } from '../src/generated/prisma/client.js';
 import { generateWeek } from '../src/modules/chores/algorithms/schedule-generator.js';
 import { buildGenContext } from '../src/modules/chores/schedule-context.js';
 import { createScheduleRows } from '../src/modules/chores/schedule-store.js';
-import { addDays, currentWeekStart, toDateStr } from '../src/modules/chores/week.js';
+import { addDays, currentWeekStart, toDateStr, weekKeyFromStart, weekStartOf } from '../src/modules/chores/week.js';
+import { buildSlices } from '../src/modules/wheel/algorithms/wheel.js';
 
 const PASSWORD = 'NestFair123';
 const INVITE_CODE = 'K7M2QZ';
@@ -158,6 +159,100 @@ async function seedChores(houseId: string, users: Record<string, { id: string }>
   void hung;
 }
 
+/**
+ * Issue #5: việc hệ thống "Việc đột xuất", 1 vòng quay đã công bố (Thiện quay, Quân trúng, Thiện không tham gia)
+ * kèm ca WHEEL còn TODO, và vài mục Live Ticker. Ghi thẳng bảng (seed không đi qua ActivityService, không phát sự kiện).
+ */
+async function seedRealtime(houseId: string, users: Record<string, { id: string; fullName: string }>) {
+  await prisma.houseActivity.deleteMany({ where: { houseId } });
+  const now = Date.now();
+  const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+  const memberOf = (key: string) =>
+    prisma.houseMember.findFirstOrThrow({ where: { houseId, userId: users[key].id, leftAt: null }, select: { id: true } });
+
+  // Vòng quay đã công bố 40 phút trước.
+  const system = await prisma.chore.create({
+    data: { houseId, title: 'Việc đột xuất', frequency: 'ADHOC', recurrenceDays: [], weight: 1, isSystem: true },
+  });
+  const today = toDateStr(new Date());
+  const weekStart = weekStartOf(today);
+  const quan = await memberOf('quan');
+  const participantIds = [users.hung.id, users.mai.id, users.quan.id];
+  const seed = 771204;
+  const slices = buildSlices(participantIds, seed);
+  const landingIndex = slices.indexOf(users.quan.id);
+  const taskTitle = 'Mua nước bình 20L';
+  const slot = await prisma.choreAssignment.create({
+    data: {
+      houseId,
+      choreId: system.id,
+      assigneeId: quan.id,
+      originalAssigneeId: quan.id,
+      weekKey: weekKeyFromStart(weekStart),
+      weekStart: new Date(`${weekStart}T00:00:00Z`),
+      occurrenceDate: new Date(`${today}T00:00:00Z`),
+      slotIndex: 0,
+      dueAt: new Date(now + 3 * 3_600_000),
+      titleSnapshot: taskTitle,
+      weightSnapshot: 1,
+      source: 'WHEEL',
+      status: 'TODO',
+    },
+  });
+  const spunAt = at(40);
+  await prisma.luckyWheelLog.create({
+    data: {
+      houseId,
+      spunById: users.thien.id,
+      taskTitle,
+      dueAt: slot.dueAt,
+      participantIds,
+      excludedCount: 1,
+      slices,
+      selectedUserId: users.quan.id,
+      assignmentId: slot.id,
+      seed,
+      landingIndex,
+      status: 'REVEALED',
+      spunAt,
+      durationMs: 6000,
+      revealAt: new Date(spunAt.getTime() + 6000),
+    },
+  });
+
+  // Live Ticker: lấy các ca demo của tuần này để câu chữ khớp dữ liệu.
+  const demo = (status: 'PENDING_VERIFY' | 'REJECTED' | 'MISSED') =>
+    prisma.choreAssignment.findFirst({ where: { houseId, status, source: { not: 'WHEEL' } }, orderBy: { dueAt: 'desc' } });
+  const [pending, rejected, missed] = await Promise.all([demo('PENDING_VERIFY'), demo('REJECTED'), demo('MISSED')]);
+  const actor = (key: string) => ({ actorUserId: users[key].id, actorName: users[key].fullName });
+  const rows = [
+    { ...actor('hung'), type: 'schedule.generated', params: { weekKey: weekKeyFromStart(weekStart), relaxed: false }, createdAt: at(60 * 30) },
+    missed && { ...actor('quan'), type: 'chore.missed', params: { count: 1, choreTitle: missed.titleSnapshot, choreTitles: [missed.titleSnapshot] }, createdAt: at(180) },
+    rejected && {
+      ...actor('hung'),
+      type: 'chore.rejected',
+      params: { assignmentId: rejected.id, choreTitle: rejected.titleSnapshot, targetUserId: users.mai.id, targetName: users.mai.fullName },
+      createdAt: at(95),
+    },
+    pending && { ...actor('thien'), type: 'chore.submitted', params: { assignmentId: pending.id, choreTitle: pending.titleSnapshot, selfAttested: false }, createdAt: at(70) },
+    {
+      ...actor('thien'),
+      type: 'wheel.result',
+      params: {
+        taskTitle,
+        participantIds,
+        participantNames: [users.hung.fullName, users.mai.fullName, users.quan.fullName],
+        excludedCount: 1,
+        winnerUserId: users.quan.id,
+        winnerName: users.quan.fullName,
+      },
+      createdAt: new Date(spunAt.getTime() + 6000),
+    },
+  ].filter((r): r is NonNullable<typeof r> => !!r);
+  await prisma.houseActivity.createMany({ data: rows.map((r) => ({ houseId, ...r })) });
+  return rows.length;
+}
+
 async function main() {
   const started = Date.now();
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
@@ -209,10 +304,11 @@ async function main() {
   }
 
   await seedChores(house.id, users);
+  const activities = await seedRealtime(house.id, users);
 
   console.log(
     `Seed xong trong ${Date.now() - started}ms: ${house.name} (mã ${INVITE_CODE}), ` +
-      `${MEMBERS.length} tài khoản *@nestfair.demo / ${PASSWORD}`,
+      `${MEMBERS.length} tài khoản *@nestfair.demo / ${PASSWORD}, 1 vòng quay, ${activities} mục ticker`,
   );
 }
 
