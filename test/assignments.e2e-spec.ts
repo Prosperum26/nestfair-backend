@@ -102,11 +102,11 @@ describe('Schedule & assignments API (e2e)', () => {
 
   it('CREATE: thành viên thường tạo được; lần 2 trả lịch cũ (changed:false), không lỗi', async () => {
     const h = await house(['Hùng', 'Thiện']);
-    const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
+    const emit = vi.spyOn(fx.app.get(EventsService), 'send');
     const first = await shuffle(h.users[1].token, h.houseId, { weekKey: nextKey, mode: 'CREATE' }).expect(201);
     expect(first.body.changed).toBe(true);
     expect(first.body.assignments).toHaveLength(4);
-    expect(emit).toHaveBeenCalledWith(h.houseId, 'chore:shuffled', expect.objectContaining({ weekKey: nextKey, reasons: expect.any(Array) }));
+    expect(emit).toHaveBeenCalledWith(`house:${h.houseId}`, expect.objectContaining({ type: 'chore:shuffled', payload: expect.objectContaining({ weekKey: nextKey, reasons: expect.any(Array) }) }));
 
     emit.mockClear();
     const second = await shuffle(h.users[0].token, h.houseId, { weekKey: nextKey, mode: 'CREATE' }).expect(201);

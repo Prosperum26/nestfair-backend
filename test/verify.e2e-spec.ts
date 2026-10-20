@@ -31,11 +31,11 @@ describe('Verify, appeal & override (e2e)', () => {
   describe('verify', () => {
     it('thành viên khác APPROVED → DONE, verifyMode PEER, ghi người duyệt, emit chore:verified', async () => {
       const { users, assignment, houseId, memberId } = await pending();
-      const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
+      const emit = vi.spyOn(fx.app.get(EventsService), 'send');
       const res = await verify(users[0].token, assignment.id, { decision: 'APPROVED' }).expect(200);
       expect(res.body).toMatchObject({ status: 'DONE', verifyMode: 'PEER', verifiedById: memberId(users[0]), rejectReason: null });
       expect(res.body.verifiedAt).toBeTruthy();
-      expect(emit).toHaveBeenCalledWith(houseId, 'chore:verified', expect.objectContaining({ assignmentId: assignment.id, status: 'DONE', verifyMode: 'PEER' }));
+      expect(emit).toHaveBeenCalledWith(`house:${houseId}`, expect.objectContaining({ type: 'chore:verified', payload: expect.objectContaining({ assignmentId: assignment.id, status: 'DONE', verifyMode: 'PEER' }) }));
     });
 
     it('REJECTED kèm lý do → REJECTED, rejectCount tăng; người làm nộp lại được', async () => {

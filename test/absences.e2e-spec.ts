@@ -53,7 +53,7 @@ describe('Absences, breaks & audit (e2e)', () => {
       const outside = before.filter((s) => s.assigneeId === absentMember && !inTuesdayToThursday(s));
       expect(inRange.length).toBeGreaterThan(0);
 
-      const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
+      const emit = vi.spyOn(fx.app.get(EventsService), 'send');
       const res = await fx.as(absent.token).post(absences(h.houseId), { startDate: tue, endDate: thu, reason: 'Về quê' }).expect(201);
       expect(res.body).toMatchObject({ userId: absent.id, startDate: tue, endDate: thu, reason: 'Về quê' });
 
@@ -64,7 +64,7 @@ describe('Absences, breaks & audit (e2e)', () => {
         expect(now).toMatchObject({ source: 'REASSIGN', status: 'TODO', originalAssigneeId: absentMember });
       }
       for (const s of outside) expect(after.find((x) => x.id === s.id)!.assigneeId).toBe(absentMember);
-      expect(emit).toHaveBeenCalledWith(h.houseId, 'chore:reassigned', expect.objectContaining({ assignmentIds: expect.any(Array) }));
+      expect(emit).toHaveBeenCalledWith(`house:${h.houseId}`, expect.objectContaining({ type: 'chore:reassigned', payload: expect.objectContaining({ assignmentIds: expect.any(Array) }) }));
     });
 
     it('slot còn < 24h không bị tự dời (phải dùng luồng đổi ca)', async () => {
@@ -133,14 +133,14 @@ describe('Absences, breaks & audit (e2e)', () => {
     it('S-23: slot TODO trong khoảng nghỉ → CANCELLED (không MISSED), emit chore:cancelled; sinh lịch sau bỏ ngày nghỉ', async () => {
       const h = await dailyHouse(['Hùng', 'Thiện']);
       await svc.ensureSchedule(h.houseId, next, 'CRON', monday);
-      const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
+      const emit = vi.spyOn(fx.app.get(EventsService), 'send');
       await fx.as(h.users[0].token).post(breaks(h.houseId), { startDate: tue, endDate: thu, reason: 'Du lịch' }).expect(201);
       const after = await slots(h.houseId, next);
       for (const s of after) {
         const inBreak = s.occurrenceDate >= dateOf(tue) && s.occurrenceDate <= dateOf(thu);
         expect(s.status === 'CANCELLED').toBe(inBreak);
       }
-      expect(emit).toHaveBeenCalledWith(h.houseId, 'chore:cancelled', expect.objectContaining({ assignmentIds: expect.any(Array) }));
+      expect(emit).toHaveBeenCalledWith(`house:${h.houseId}`, expect.objectContaining({ type: 'chore:cancelled', payload: expect.objectContaining({ assignmentIds: expect.any(Array) }) }));
 
       // Nhà khác: nghỉ trước, sinh lịch sau → không có slot trong ngày nghỉ.
       const g = await dailyHouse(['Mai', 'Quân']);

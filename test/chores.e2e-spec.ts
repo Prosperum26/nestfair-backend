@@ -103,12 +103,12 @@ describe('Chores (e2e)', () => {
     const afterEdit = await fx.prisma.choreAssignment.findFirstOrThrow({ where: { id: rows[1].id } });
     expect(afterEdit).toMatchObject({ weightSnapshot: 2, titleSnapshot: 'Dọn bếp' });
 
-    const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
+    const emit = vi.spyOn(fx.app.get(EventsService), 'send');
     await admin.patch(url(h.houseId, `/${chore.id}`), { isActive: false }).expect(200);
     const after = await fx.prisma.choreAssignment.findMany({ where: { houseId: h.houseId }, orderBy: { occurrenceDate: 'asc' } });
     expect(after[0].status).toBe('DONE');
     expect(after.slice(1).every((a) => a.status === 'CANCELLED')).toBe(true);
-    expect(emit).toHaveBeenCalledWith(h.houseId, 'chore:cancelled', expect.objectContaining({ choreId: chore.id }));
+    expect(emit).toHaveBeenCalledWith(`house:${h.houseId}`, expect.objectContaining({ type: 'chore:cancelled', payload: expect.objectContaining({ choreId: chore.id }) }));
     const actions = (await fx.prisma.choreAuditLog.findMany({ where: { houseId: h.houseId } })).map((l) => l.action).sort();
     expect(actions).toEqual(['CHORE_CREATED', 'CHORE_DEACTIVATED', 'CHORE_UPDATED']);
   });

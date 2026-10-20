@@ -52,9 +52,9 @@ describe('Chore cron (e2e)', () => {
 
     it('phát chore:missed cho nhà có ca bị đánh dấu', async () => {
       const h = await assignmentIn(fx, ['Hùng', 'Thiện'], { dueAt: ago(5) });
-      const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
+      const emit = vi.spyOn(fx.app.get(EventsService), 'send');
       await cron.markMissed(new Date(), [h.houseId]);
-      expect(emit).toHaveBeenCalledWith(h.houseId, 'chore:missed', expect.objectContaining({ assignmentIds: [h.assignment.id] }));
+      expect(emit).toHaveBeenCalledWith(`house:${h.houseId}`, expect.objectContaining({ type: 'chore:missed', payload: expect.objectContaining({ assignmentIds: [h.assignment.id] }) }));
     });
 
     it('S-54: check-in đúng lúc cron chạy → chỉ một bên thắng, không ai ghi đè', async () => {
@@ -71,11 +71,11 @@ describe('Chore cron (e2e)', () => {
       const h = await assignmentIn(fx, ['Hùng', 'Thiện'], { occurrenceDate: addDays(toDateStr(new Date()), -4), dueAt: ago(96) });
       await makeAssignment(fx, h, { occurrenceDate: addDays(toDateStr(new Date()), -3), dueAt: ago(72) });
       await makeAssignment(fx, h, { occurrenceDate: addDays(toDateStr(new Date()), -2), dueAt: ago(48) });
-      const emitUser = vi.spyOn(fx.app.get(EventsService), 'emitToUser');
+      const emitUser = vi.spyOn(fx.app.get(EventsService), 'send');
       await cron.markMissed(new Date(), [h.houseId]);
       const logs = await fx.prisma.choreAuditLog.findMany({ where: { houseId: h.houseId, action: 'MISSED_STREAK' } });
       expect(logs).toHaveLength(1);
-      expect(emitUser).toHaveBeenCalledWith(h.users[0].id, 'chore:missed', expect.objectContaining({ streak: 3 }));
+      expect(emitUser).toHaveBeenCalledWith(`user:${h.users[0].id}`, expect.objectContaining({ type: 'chore:missed', payload: expect.objectContaining({ streak: 3 }) }));
       await cron.markMissed(new Date(), [h.houseId]);
       expect(await fx.prisma.choreAuditLog.count({ where: { houseId: h.houseId, action: 'MISSED_STREAK' } })).toBe(1);
     });
@@ -85,13 +85,13 @@ describe('Chore cron (e2e)', () => {
     it('PENDING_VERIFY quá 48h → DONE AUTO_APPROVED; chưa tới 48h giữ nguyên; chạy lại không lỗi', async () => {
       const h = await assignmentIn(fx, ['Hùng', 'Thiện'], { status: 'PENDING_VERIFY', submittedAt: ago(49) });
       const fresh = await makeAssignment(fx, h, { status: 'PENDING_VERIFY', submittedAt: ago(47) });
-      const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
+      const emit = vi.spyOn(fx.app.get(EventsService), 'send');
       expect(await cron.autoApprove(new Date(), [h.houseId])).toBe(1);
       const approved = await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: h.assignment.id } });
       expect(approved).toMatchObject({ status: 'DONE', verifyMode: 'AUTO_APPROVED', verifiedById: null });
       expect(approved.verifiedAt).toBeTruthy();
       expect(await status(fresh.id)).toBe('PENDING_VERIFY');
-      expect(emit).toHaveBeenCalledWith(h.houseId, 'chore:verified', expect.objectContaining({ assignmentId: h.assignment.id, verifyMode: 'AUTO_APPROVED', status: 'DONE' }));
+      expect(emit).toHaveBeenCalledWith(`house:${h.houseId}`, expect.objectContaining({ type: 'chore:verified', payload: expect.objectContaining({ assignmentId: h.assignment.id, verifyMode: 'AUTO_APPROVED', status: 'DONE' }) }));
       expect(await cron.autoApprove(new Date(), [h.houseId])).toBe(0);
     });
   });
