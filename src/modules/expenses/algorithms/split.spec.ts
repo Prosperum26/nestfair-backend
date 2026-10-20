@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeSplit, splitCustom, splitEqual, splitExact } from './split.js';
+import { computeSplit, splitCustom, splitEqual, splitExact, splitItemized } from './split.js';
 
 const sum = (shares: { amount: number }[]) => shares.reduce((s, x) => s + x.amount, 0);
 const amounts = (shares: { amount: number }[]) => shares.map((s) => s.amount);
@@ -128,9 +128,112 @@ describe('computeSplit (điểm vào chung)', () => {
     expect(computeSplit({ type: 'EXACT', total: 90, amounts: amountsIn })).toEqual(amountsIn);
   });
 
-  it('ITEMIZED chưa hỗ trợ: ném SPLIT_TYPE_NOT_SUPPORTED (422)', () => {
-    expect(() => computeSplit({ type: 'ITEMIZED', total: 90 })).toThrowError(
-      expect.objectContaining({ status: 422, response: expect.objectContaining({ code: 'SPLIT_TYPE_NOT_SUPPORTED' }) }),
+  it('ITEMIZED điều phối tới splitItemized', () => {
+    const items = [{ lineTotal: 30_000, userIds: ['a', 'b'] }];
+    expect(computeSplit({ type: 'ITEMIZED', total: 33_000, items, order: ['a', 'b'] })).toEqual(splitItemized(33_000, items, ['a', 'b']));
+  });
+});
+
+const invalid = expect.objectContaining({ status: 422, response: expect.objectContaining({ code: 'SPLIT_INVALID' }) });
+const asMap = (shares: { userId: string; amount: number }[]) => Object.fromEntries(shares.map((x) => [x.userId, x.amount]));
+
+describe('splitItemized (chia theo từng món)', () => {
+  const HTMQ = ['H', 'T', 'M', 'Q'];
+
+  it('V1 (ảnh 18): hóa đơn Bách Hóa Xanh 245.000đ chia theo món, tổng món khớp tổng hóa đơn', () => {
+    const shares = splitItemized(
+      245_000,
+      [
+        { lineTotal: 32_000, userIds: HTMQ },
+        { lineTotal: 15_000, userIds: HTMQ },
+        { lineTotal: 108_000, userIds: ['H', 'Q'] },
+        { lineTotal: 64_000, userIds: ['M'] },
+        { lineTotal: 26_000, userIds: HTMQ },
+      ],
+      HTMQ,
     );
+    expect(asMap(shares)).toEqual({ H: 72_250, T: 18_250, M: 82_250, Q: 72_250 });
+    expect(shares.map((x) => x.userId)).toEqual(HTMQ);
+    expect(sum(shares)).toBe(245_000);
+  });
+
+  it('V2 (giảm giá): tổng hóa đơn nhỏ hơn tổng món thì phần chênh trừ theo tỷ lệ tiền món của từng người', () => {
+    const shares = splitItemized(
+      100_000,
+      [
+        { lineTotal: 60_000, userIds: ['a', 'b', 'c'] },
+        { lineTotal: 50_000, userIds: ['a'] },
+      ],
+      ['a', 'b', 'c'],
+    );
+    // a gánh 70.000/110.000 của phần giảm 10.000, b và c mỗi người 20.000/110.000; dư 1đ trừ thêm cho a (đầu danh sách).
+    expect(asMap(shares)).toEqual({ a: 63_636, b: 18_182, c: 18_182 });
+    expect(sum(shares)).toBe(100_000);
+  });
+
+  it('V3 (phí): tổng hóa đơn lớn hơn tổng món thì phần chênh cộng theo tỷ lệ', () => {
+    const shares = splitItemized(33_000, [{ lineTotal: 30_000, userIds: ['a', 'b'] }], ['a', 'b', 'c']);
+    expect(asMap(shares)).toEqual({ a: 16_500, b: 16_500 });
+  });
+
+  it('V4 (dư 1đ): phần dư cộng 1đ cho người đứng đầu danh sách ưu tiên', () => {
+    const shares = splitItemized(10_001, [{ lineTotal: 10_000, userIds: ['a', 'b'] }], ['a', 'b', 'c']);
+    expect(asMap(shares)).toEqual({ a: 5_001, b: 5_000 });
+  });
+
+  it('V5 (số lớn): tích diff × tiền món vượt 2^53 vẫn chia đúng tới từng đồng nhờ BigInt', () => {
+    // diff = 100.000.000, base(a) = 700.000.000 → tích 7×10^16 > Number.MAX_SAFE_INTEGER.
+    expect(100_000_000 * 700_000_000).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
+    const shares = splitItemized(
+      1_000_000_000,
+      [
+        { lineTotal: 500_000_000, userIds: ['a'] },
+        { lineTotal: 400_000_000, userIds: ['a', 'b'] },
+      ],
+      ['a', 'b', 'c'],
+    );
+    expect(asMap(shares)).toEqual({ a: 777_777_778, b: 222_222_222 });
+    expect(sum(shares)).toBe(1_000_000_000);
+  });
+
+  it('bất biến: Σ phần chia luôn bằng total và không phần nào âm (200 ca ngẫu nhiên có seed, tổng tới 1 tỷ)', () => {
+    const rnd = rng(20261019);
+    const pick = (n: number) => Math.floor(rnd() * n);
+    for (let run = 0; run < 200; run++) {
+      const people = Array.from({ length: 2 + pick(5) }, (_, i) => 'u' + i);
+      const items = Array.from({ length: 1 + pick(8) }, () => {
+        const k = 1 + pick(people.length);
+        const userIds = people.filter(() => rnd() < k / people.length);
+        return { lineTotal: 1 + pick(300_000_000), userIds: userIds.length ? userIds : [people[pick(people.length)]] };
+      });
+      const total = 1 + pick(1_000_000_000);
+      const shares = splitItemized(total, items, people);
+      expect(sum(shares), 'run ' + run).toBe(total);
+      for (const x of shares) expect(x.amount, 'run ' + run + ' ' + x.userId).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('món nhỏ hơn số người (2đ chia 3 người) không tạo phần 0đ trong kết quả', () => {
+    const shares = splitItemized(2, [{ lineTotal: 2, userIds: ['a', 'b', 'c'] }], ['a', 'b', 'c']);
+    expect(asMap(shares)).toEqual({ a: 1, b: 1 });
+  });
+
+  it('kết quả theo thứ tự ưu tiên; người ngoài danh sách ưu tiên vẫn nhận phần và đứng sau cùng', () => {
+    const shares = splitItemized(10, [{ lineTotal: 10, userIds: ['x', 'b', 'a'] }], ['a', 'b']);
+    expect(shares.map((x) => x.userId)).toEqual(['a', 'b', 'x']);
+    expect(sum(shares)).toBe(10);
+  });
+
+  it('đầu vào sai: ném SPLIT_INVALID (422)', () => {
+    const ok = [{ lineTotal: 100, userIds: ['a'] }];
+    expect(() => splitItemized(100, [], ['a'])).toThrowError(invalid);
+    expect(() => splitItemized(0, ok, ['a'])).toThrowError(invalid);
+    expect(() => splitItemized(-1, ok, ['a'])).toThrowError(invalid);
+    expect(() => splitItemized(1.5, ok, ['a'])).toThrowError(invalid);
+    expect(() => splitItemized(100, [{ lineTotal: 0, userIds: ['a'] }], ['a'])).toThrowError(invalid);
+    expect(() => splitItemized(100, [{ lineTotal: -5, userIds: ['a'] }], ['a'])).toThrowError(invalid);
+    expect(() => splitItemized(100, [{ lineTotal: 10.5, userIds: ['a'] }], ['a'])).toThrowError(invalid);
+    expect(() => splitItemized(100, [{ lineTotal: 100, userIds: [] }], ['a'])).toThrowError(invalid);
+    expect(() => splitItemized(100, [{ lineTotal: 100, userIds: ['a', 'a'] }], ['a'])).toThrowError(invalid);
   });
 });

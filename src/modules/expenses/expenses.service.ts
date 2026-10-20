@@ -273,8 +273,8 @@ export class ExpensesService {
         shares = computeSplit({ type: 'EXACT', total: req.total, amounts: req.splits });
         break;
       case 'ITEMIZED':
-        shares = computeSplit({ type: 'ITEMIZED', total: req.total });
-        break;
+        // Tạm thời chưa mở qua API: B3 nối items từ request vào computeSplit.
+        throw coded(HttpStatus.UNPROCESSABLE_ENTITY, 'SPLIT_TYPE_NOT_SUPPORTED', 'Chia theo từng món chưa được hỗ trợ');
     }
     return shares.filter((s) => s.amount > 0);
   }
