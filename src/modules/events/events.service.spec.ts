@@ -71,6 +71,20 @@ describe('Outbox', () => {
     expect(emit).toHaveBeenCalledTimes(2);
   });
 
+  it('gom sự kiện đổi ca và sổ nợ tới đúng room và đúng type', () => {
+    const { server, emit, to } = fakeServer();
+    const svc = new EventsService();
+    svc.setServer(server);
+    svc
+      .outbox()
+      .toUser('u1', 'swap:requested', { swapId: 's1' }, { houseId: 'h1' })
+      .toUser('u2', 'chore_debt:pick_requested', { debtId: 'd1' }, { houseId: 'h1' })
+      .toHouse('h1', 'rotation_swap:applied', { weekKey: '2026-W44' })
+      .flush();
+    expect(to.mock.calls.map((c) => c[0])).toEqual(['user:u1', 'user:u2', 'house:h1']);
+    expect(emit.mock.calls.map((c) => c[0] as string)).toEqual(['swap:requested', 'chore_debt:pick_requested', 'rotation_swap:applied']);
+  });
+
   it('transaction rollback (không tới flush) thì không phát (RT-04)', async () => {
     const { server, emit } = fakeServer();
     const svc = new EventsService();

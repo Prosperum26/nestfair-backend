@@ -11,9 +11,24 @@ export type ChoreEvent =
   | 'chore:reassigned'
   | 'chore:cancelled';
 export type WheelEvent = 'wheel:spinning' | 'wheel:result' | 'wheel:voided';
+export type SwapEvent =
+  | 'swap:requested'
+  | 'swap:accepted'
+  | 'swap:rejected'
+  | 'swap:expired'
+  | 'swap:cancelled'
+  | 'swap:escalated';
+export type DebtEvent =
+  | 'chore_debt:created'
+  | 'chore_debt:pick_requested'
+  | 'chore_debt:paid'
+  | 'chore_debt:forgiven';
 export type RealtimeEvent =
   | ChoreEvent
   | WheelEvent
+  | SwapEvent
+  | DebtEvent
+  | 'rotation_swap:applied'
   | 'activity:new'
   | 'presence:update'
   | 'member:joined'
