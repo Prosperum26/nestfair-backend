@@ -2,7 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { coded } from '../../common/coded-exception.js';
 import type { ChoreAssignment, ChoreSwapRequest } from '../../generated/prisma/client.js';
-import type { HouseRole } from '../../generated/prisma/enums.js';
+import type { Compensation, HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ActivityService } from '../activity/activity.service.js';
 import { EventsService, type Outbox } from '../events/events.service.js';
@@ -14,10 +14,12 @@ import { dueAtOf, toDateStr, weekStartFromKey } from '../chores/week.js';
 import { expiresAtFor } from './algorithms/swap-rules.js';
 import type { CreateSwapDto } from './dto/create-swap.dto.js';
 import type { SwapDto, SwapSlotDto } from './dto/swap-response.dto.js';
+import { ChoreDebtService } from './chore-debt.service.js';
 import { closeSwap } from './swap-close.js';
 import { fillMessage, SWAP_ERRORS } from './swap-errors.js';
 import {
   contextWindow,
+  coverWarnings,
   evaluateCover,
   evaluateExchange,
   exchangeWarnings,
@@ -73,6 +75,7 @@ export class SwapsService {
     private readonly activity: ActivityService,
     private readonly audit: AuditService,
     private readonly lifecycle: SwapLifecycleService,
+    private readonly debts: ChoreDebtService,
   ) {}
 
   // ---------------------------------------------------------------- tạo
@@ -95,7 +98,8 @@ export class SwapsService {
   }
 
   private async createInTx(tx: Db, m: Actor, dto: CreateSwapDto, idemKey: string, now: Date, outbox: Outbox) {
-    const ids = [dto.fromAssignmentId, dto.toAssignmentId].sort();
+    const exchange = dto.type === 'EXCHANGE';
+    const ids = (exchange ? [dto.fromAssignmentId, dto.toAssignmentId!] : [dto.fromAssignmentId]).sort();
     await this.lockAssignments(tx, m.houseId, ids);
 
     // Kiểm replay sau khi đã giữ khóa ca: request trùng key đến sau sẽ thấy yêu cầu của request trước.
@@ -104,72 +108,92 @@ export class SwapsService {
 
     const rows = await tx.choreAssignment.findMany({ where: { id: { in: ids }, houseId: m.houseId } });
     const from = rows.find((r) => r.id === dto.fromAssignmentId);
-    const to = rows.find((r) => r.id === dto.toAssignmentId);
-    if (!from || !to) throw new SwapRejection(HttpStatus.NOT_FOUND, 'ASSIGNMENT_NOT_FOUND', 'Không tìm thấy ca trực.');
+    const to = exchange ? rows.find((r) => r.id === dto.toAssignmentId) : undefined;
+    if (!from || (exchange && !to)) throw new SwapRejection(HttpStatus.NOT_FOUND, 'ASSIGNMENT_NOT_FOUND', 'Không tìm thấy ca trực.');
     if (from.assigneeId !== m.id) throw new SwapRejection(HttpStatus.FORBIDDEN, 'NOT_SLOT_OWNER', 'Đây không phải ca của bạn.');
 
-    const win = contextWindow([from, to]);
+    const win = contextWindow(to ? [from, to] : [from]);
     const ctx = await loadSwapContext(tx, m.houseId, win.from, win.to);
-    const input = { requesterMemberId: m.id, from, to, now, phase: 'create' as const };
-    const violations = evaluateExchange(ctx, input);
+    const id = randomUUID();
+
+    let violations: Violation[];
+    let required: string[];
+    let targetMemberId: string | null;
+    let compensation: Compensation | null = null;
+    if (to) {
+      const input = { requesterMemberId: m.id, from, to, now, phase: 'create' as const };
+      violations = evaluateExchange(ctx, input);
+      required = exchangeWarnings(ctx, input);
+      targetMemberId = to.assigneeId;
+    } else {
+      compensation = dto.compensation!;
+      targetMemberId = dto.targetMemberId ?? null;
+      const input = { requesterMemberId: m.id, from, targetMemberId, compensation, rewardAmount: dto.rewardAmount ?? null, now, phase: 'create' as const };
+      violations = evaluateCover(ctx, input);
+      required = coverWarnings(ctx, input);
+    }
     if (violations.length) throw fromViolation(violations[0]);
 
-    await this.assertWithinLimits(tx, m, from, to, now, ctx.members.get(to.assigneeId!)?.name ?? '');
+    await this.assertWithinLimits(tx, m, from.id, targetMemberId, now, targetMemberId ? ctx.members.get(targetMemberId)?.name ?? '' : '');
 
-    const required = exchangeWarnings(ctx, input);
     const acknowledged = new Set(dto.acknowledgedWarnings ?? []);
-    if (required.some((w) => !acknowledged.has(w))) {
-      throw rejection('WARNINGS_NOT_ACKNOWLEDGED', {}, { warnings: required });
-    }
+    if (required.some((w) => !acknowledged.has(w))) throw rejection('WARNINGS_NOT_ACKNOWLEDGED', {}, { warnings: required });
 
-    const id = randomUUID();
     const locked = await tx.swapLock.createMany({
       data: ids.map((assignmentId) => ({ assignmentId, swapRequestId: id })),
       skipDuplicates: true,
     });
     if (locked.count !== ids.length) throw rejection('SLOT_LOCKED');
 
+    const gift = compensation === 'GIFT';
     const swap = await tx.choreSwapRequest.create({
       data: {
         id,
         houseId: m.houseId,
-        type: 'EXCHANGE',
+        type: dto.type,
         requesterMemberId: m.id,
-        targetMemberId: to.assigneeId,
+        targetMemberId,
         fromAssignmentId: from.id,
-        toAssignmentId: to.id,
+        toAssignmentId: to?.id ?? null,
+        compensation,
+        rewardNote: gift ? dto.rewardNote || null : null,
+        rewardAmount: gift ? dto.rewardAmount ?? null : null,
         reason: dto.reason || null,
-        note: dto.note || null,
-        expiresAt: expiresAtFor('EXCHANGE', now, [from.dueAt, to.dueAt]),
+        note: targetMemberId ? dto.note || null : null,
+        expiresAt: expiresAtFor(dto.type, now, to ? [from.dueAt, to.dueAt] : [from.dueAt]),
         rootRequestId: id,
         fromWeightSnapshot: from.weightSnapshot,
-        toWeightSnapshot: to.weightSnapshot,
+        toWeightSnapshot: to?.weightSnapshot ?? null,
         fromVersion: from.version,
-        toVersion: to.version,
+        toVersion: to?.version ?? null,
         createIdemKey: idemKey,
       },
     });
 
-    const requester = ctx.members.get(m.id);
-    const target = ctx.members.get(to.assigneeId!);
     // Payload chỉ là tín hiệu để client tải lại: không mang lý do, lời nhắn hay số tiền.
-    outbox.toUser(
-      target!.userId,
-      'swap:requested',
-      { swapId: id, type: swap.type, fromAssignment: slotSummary(from), requesterName: requester?.name, market: false, expiresAt: swap.expiresAt },
-      { houseId: m.houseId },
-    );
+    const payload = {
+      swapId: id,
+      type: swap.type,
+      fromAssignment: slotSummary(from),
+      requesterName: ctx.members.get(m.id)?.name,
+      market: targetMemberId === null,
+      hasReward: gift && (swap.rewardAmount !== null || !!swap.rewardNote),
+      expiresAt: swap.expiresAt,
+    };
+    if (targetMemberId) outbox.toUser(ctx.members.get(targetMemberId)!.userId, 'swap:requested', payload, { houseId: m.houseId });
+    else outbox.toHouse(m.houseId, 'swap:requested', payload);
     return { created: true, swap };
   }
 
   /** R-SWAP-12: tối đa 3 PENDING, 10 yêu cầu mỗi ngày, và khóa gửi lại 24 giờ sau 2 lần bị từ chối cùng ca, cùng người. */
-  private async assertWithinLimits(tx: Db, m: Actor, from: ChoreAssignment, to: ChoreAssignment, now: Date, targetName: string) {
+  private async assertWithinLimits(tx: Db, m: Actor, fromId: string, targetMemberId: string | null, now: Date, targetName: string) {
     const pending = await tx.choreSwapRequest.count({ where: { requesterMemberId: m.id, status: 'PENDING' } });
     if (pending >= PENDING_LIMIT) throw rejection('SWAP_PENDING_LIMIT');
     const today = await tx.choreSwapRequest.count({ where: { requesterMemberId: m.id, createdAt: { gte: dueAtOf(toDateStr(now), '00:00') } } });
     if (today >= DAILY_LIMIT) throw rejection('SWAP_DAILY_LIMIT');
+    if (!targetMemberId) return;
     const rejected = await tx.choreSwapRequest.findMany({
-      where: { requesterMemberId: m.id, targetMemberId: to.assigneeId, fromAssignmentId: from.id, status: 'REJECTED' },
+      where: { requesterMemberId: m.id, targetMemberId, fromAssignmentId: fromId, status: 'REJECTED' },
       orderBy: { closedAt: 'desc' },
       take: COOLDOWN_REJECTIONS,
       select: { closedAt: true },
@@ -208,8 +232,10 @@ export class SwapsService {
     }
 
     if (swap.expiresAt.getTime() <= now.getTime()) {
-      await this.closeSwap(tx, swap, 'EXPIRED', 'EXPIRED_NO_TAKER');
-      this.notifyExpired(outbox, await this.memberUsers(tx, [swap.requesterMemberId]), swap);
+      // COVER: người gửi còn đến `dueAt − 1h` để chọn leo thang (spec 5.6).
+      const coverSlot = swap.type === 'COVER' && swap.fromAssignmentId ? await tx.choreAssignment.findUnique({ where: { id: swap.fromAssignmentId }, select: { dueAt: true } }) : null;
+      const expired = await this.closeSwap(tx, swap, 'EXPIRED', 'EXPIRED_NO_TAKER', coverSlot ? { escalationDeadline: new Date(coverSlot.dueAt.getTime() - HOUR) } : {});
+      this.notifyExpired(outbox, await this.memberUsers(tx, [swap.requesterMemberId]), expired);
       return { kind: 'REJECT', rejection: rejection('SWAP_EXPIRED') };
     }
 
@@ -220,10 +246,8 @@ export class SwapsService {
       return { kind: 'REJECT', rejection: rejection('CANNOT_ACCEPT_OWN') };
     }
 
-    if (swap.type !== 'EXCHANGE' || !swap.fromAssignmentId || !swap.toAssignmentId) {
-      throw new Error(`Loại yêu cầu ${swap.type} chưa hỗ trợ ở bước này.`);
-    }
-    const ids = [swap.fromAssignmentId, swap.toAssignmentId].sort();
+    if (swap.type === 'PERMANENT' || !swap.fromAssignmentId) throw new Error(`Loại yêu cầu ${swap.type} chưa hỗ trợ ở bước này.`);
+    const ids = [swap.fromAssignmentId, swap.toAssignmentId].filter((x): x is string => !!x).sort();
     await this.lockAssignments(tx, m.houseId, ids);
     const slots = await tx.choreAssignment.findMany({ where: { id: { in: ids } } });
     const from = slots.find((s) => s.id === swap.fromAssignmentId);
@@ -231,50 +255,72 @@ export class SwapsService {
 
     const stale = this.staleReason(swap, from, to);
     let problem: SwapRejection | null = stale ? rejection('SLOT_CHANGED', {}, { reasonCode: stale }) : null;
-    if (!problem && from && to) {
-      const win = contextWindow([from, to]);
+    if (!problem && from) {
+      const win = contextWindow(to ? [from, to] : [from]);
       const ctx = await loadSwapContext(tx, m.houseId, win.from, win.to, swap.id);
-      const violations = evaluateExchange(ctx, { requesterMemberId: swap.requesterMemberId, from, to, now, phase: 'accept' });
+      const violations = to
+        ? evaluateExchange(ctx, { requesterMemberId: swap.requesterMemberId, from, to, now, phase: 'accept' })
+        : evaluateCover(ctx, {
+            requesterMemberId: swap.requesterMemberId,
+            from,
+            targetMemberId: m.id,
+            compensation: swap.compensation ?? 'GIFT',
+            rewardAmount: swap.rewardAmount,
+            now,
+            phase: 'accept',
+          });
       if (violations.length) problem = new SwapRejection(409, 'SLOT_CHANGED', violations[0].message, { reasonCode: violations[0].code });
     }
     if (problem) {
       await this.closeSwap(tx, swap, 'CANCELLED', 'SLOT_CHANGED');
       const users = await this.memberUsers(tx, [swap.requesterMemberId, swap.targetMemberId]);
-      for (const u of users.values()) outbox.toUser(u.userId, 'swap:cancelled', { swapId: swap.id, resolution: 'SLOT_CHANGED' }, { houseId: swap.houseId });
+      const payload = { swapId: swap.id, resolution: 'SLOT_CHANGED' };
+      if (swap.targetMemberId === null) outbox.toHouse(swap.houseId, 'swap:cancelled', payload);
+      else for (const u of users.values()) outbox.toUser(u.userId, 'swap:cancelled', payload, { houseId: swap.houseId });
       return { kind: 'REJECT', rejection: problem };
     }
 
-    // Áp dụng: hoán đổi người làm, giữ originalAssigneeId, ghi nguồn SWAP và tăng version.
-    await tx.choreAssignment.update({
-      where: { id: from!.id },
-      data: { assigneeId: to!.assigneeId, source: 'SWAP', swapRequestId: swap.id, version: { increment: 1 } },
-    });
-    await tx.choreAssignment.update({
-      where: { id: to!.id },
-      data: { assigneeId: from!.assigneeId, source: 'SWAP', swapRequestId: swap.id, version: { increment: 1 } },
-    });
+    // Áp dụng. Luôn giữ originalAssigneeId; tăng version; ghi yêu cầu đã tạo ra `source` hiện tại.
+    const bump = { swapRequestId: swap.id, version: { increment: 1 } } as const;
+    let debtEvent: { debtId: string; debtorMemberId: string } | null = null;
+    if (to) {
+      await tx.choreAssignment.update({ where: { id: from!.id }, data: { assigneeId: to.assigneeId, source: 'SWAP', ...bump } });
+      await tx.choreAssignment.update({ where: { id: to.id }, data: { assigneeId: from!.assigneeId, source: 'SWAP', ...bump } });
+    } else {
+      await tx.choreAssignment.update({ where: { id: from!.id }, data: { assigneeId: m.id, source: 'COVER', ...bump } });
+      if (swap.compensation === 'PAYBACK') {
+        const debt = await this.debts.createOrOffsetDebt(tx, swap, m.id);
+        debtEvent = { debtId: debt.id, debtorMemberId: debt.debtorMemberId };
+      }
+    }
     const closed = await this.closeSwap(tx, swap, 'ACCEPTED', 'ACCEPTED_BY_TARGET', { acceptedById: m.id, acceptedAt: now, acceptIdemKey: idemKey });
 
     const actor = await actorOfMember(tx, m.id);
     const users = await this.memberUsers(tx, [swap.requesterMemberId]);
     const requesterName = users.get(swap.requesterMemberId)?.name ?? '';
+    const hasReward = swap.rewardAmount !== null || !!swap.rewardNote;
     await this.activity.record(tx, outbox, {
       houseId: swap.houseId,
       type: 'swap.accepted',
       actor,
-      params: { swapId: swap.id, type: swap.type, requesterName, choreTitles: [from!.titleSnapshot, to!.titleSnapshot] },
+      // Ticker chỉ ghi "kèm quà", không ghi số tiền hay ghi chú.
+      params: { swapId: swap.id, type: swap.type, requesterName, choreTitles: [from!.titleSnapshot, ...(to ? [to.titleSnapshot] : [])], hasReward },
       dedupeKey: `swap.accepted:${swap.id}`,
     });
     outbox.toHouse(swap.houseId, 'swap:accepted', { swapId: swap.id, type: swap.type, acceptedByName: actor.name, changedAssignmentIds: ids }, actor);
+    if (debtEvent) {
+      outbox.toHouse(swap.houseId, 'chore_debt:created', { debtId: debtEvent.debtId, debtorName: requesterName, creditorName: actor.name }, actor);
+    }
     return { kind: 'OK', swap: closed };
   }
 
   /** So trạng thái hiện tại của các ca với lúc tạo yêu cầu (spec 5.2 bước 5). */
   private staleReason(swap: ChoreSwapRequest, from?: ChoreAssignment, to?: ChoreAssignment): string | null {
-    if (!from || !to) return 'SLOT_GONE';
-    if (from.assigneeId !== swap.requesterMemberId || to.assigneeId !== swap.targetMemberId) return 'ASSIGNEE_CHANGED';
-    if (from.status !== 'TODO' || to.status !== 'TODO') return 'STATUS_CHANGED';
-    if (from.version !== swap.fromVersion || to.version !== swap.toVersion) return 'VERSION_CHANGED';
+    if (!from || (swap.toAssignmentId && !to)) return 'SLOT_GONE';
+    if (from.assigneeId !== swap.requesterMemberId) return 'ASSIGNEE_CHANGED';
+    if (to && to.assigneeId !== swap.targetMemberId) return 'ASSIGNEE_CHANGED';
+    if (from.status !== 'TODO' || (to && to.status !== 'TODO')) return 'STATUS_CHANGED';
+    if (from.version !== swap.fromVersion || (to && to.version !== swap.toVersion)) return 'VERSION_CHANGED';
     return null;
   }
 
