@@ -4,7 +4,7 @@ import { coded } from '../../common/coded-exception.js';
 import type { WeekSchedule } from '../../generated/prisma/client.js';
 import type { AssignmentSource, GeneratedBy, HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { EventsService } from '../events/events.service.js';
+import { EventsService, type Outbox } from '../events/events.service.js';
 import { generateWeek, type GenResult } from './algorithms/schedule-generator.js';
 import { rollingLoad } from './algorithms/load.js';
 import { ChoreDebtService } from '../swaps/chore-debt.service.js';
@@ -71,13 +71,17 @@ export class ScheduleService {
     onCreated?: OnScheduleChanged,
   ): Promise<{ schedule: WeekSchedule; created: boolean }> {
     this.checkRange(weekStart, now);
-    return this.withHouseLock(houseId, async (tx) => {
+    // Sự kiện sinh ra trong lúc lưu lịch (vd. mở cửa sổ chọn bù) chỉ phát sau khi transaction commit.
+    const outbox = this.events.outbox();
+    const out = await this.withHouseLock(houseId, async (tx) => {
       const existing = await tx.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } });
       if (existing) return { schedule: existing, created: false };
-      const schedule = await this.generateAndStore(tx, houseId, weekStart, by, randomSeed(), now);
+      const schedule = await this.generateAndStore(tx, outbox, houseId, weekStart, by, randomSeed(), now);
       await onCreated?.(tx, schedule);
       return { schedule, created: true };
     });
+    outbox.flush();
+    return out;
   }
 
   /** "Tạo lịch tuần này": có lịch rồi thì trả lịch cũ (S-34); lịch EMPTY thì sinh lại (vừa thêm việc). */
@@ -88,14 +92,17 @@ export class ScheduleService {
     onCreated?: OnScheduleChanged,
   ): Promise<{ schedule: WeekSchedule; created: boolean }> {
     this.checkRange(weekStart, now);
-    return this.withHouseLock(houseId, async (tx) => {
+    const outbox = this.events.outbox();
+    const out = await this.withHouseLock(houseId, async (tx) => {
       const existing = await tx.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } });
       if (existing && existing.status !== 'EMPTY') return { schedule: existing, created: false };
       if (existing) await tx.weekSchedule.delete({ where: { id: existing.id } });
-      const schedule = await this.generateAndStore(tx, houseId, weekStart, 'USER', randomSeed(), now);
+      const schedule = await this.generateAndStore(tx, outbox, houseId, weekStart, 'USER', randomSeed(), now);
       await onCreated?.(tx, schedule);
       return { schedule, created: true };
     });
+    outbox.flush();
+    return out;
   }
 
   /** Dry-run: không ghi gì, trả seed để người xem thấy "không thiên vị". */
@@ -310,13 +317,13 @@ export class ScheduleService {
 
   // ---- nội bộ ----
 
-  private async generateAndStore(tx: Db, houseId: string, weekStart: DateStr, by: GeneratedBy, seed: number, now: Date): Promise<WeekSchedule> {
+  private async generateAndStore(tx: Db, outbox: Outbox, houseId: string, weekStart: DateStr, by: GeneratedBy, seed: number, now: Date): Promise<WeekSchedule> {
     const ctx = await buildGenContext(tx, houseId, weekStart, seed);
     const res = generateWeek(ctx.input);
     const started = weekStart <= toDateStr(now);
     const status = res.status === 'EMPTY' ? 'EMPTY' : started ? 'LOCKED' : 'PUBLISHED';
     const created = await createScheduleRows(tx, houseId, weekStart, by, seed, ctx, res, status);
-    if (status !== 'EMPTY') await this.debts.openWindowsForNewSchedule(tx, houseId, created.weekStart, created.createdAt);
+    if (status !== 'EMPTY') await this.debts.openWindowsForNewSchedule(tx, outbox, houseId, created.weekStart, created.createdAt);
     return created;
   }
 }

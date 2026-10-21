@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { vi } from 'vitest';
 import { ChoreDebtService } from '../src/modules/swaps/chore-debt.service.js';
+import { ScheduleService } from '../src/modules/chores/schedule.service.js';
+import { ChoreCronService } from '../src/modules/scheduler/chore-cron.service.js';
 import { EventsService } from '../src/modules/events/events.service.js';
-import { addDays, toDateStr } from '../src/modules/chores/week.js';
+import { addDays, currentWeekStart, toDateStr } from '../src/modules/chores/week.js';
 import { dateOf, HOUR, makeAssignment } from './support/assignment-fixture.js';
 import { createFixture } from './support/house-fixture.js';
 
@@ -157,10 +159,37 @@ describe('Sổ nợ ca (e2e)', () => {
 
       const createdAt = new Date(Date.now() + 3 * HOUR);
       const sched = await nextSchedule(h, slot.weekStart, createdAt);
-      await fx.prisma.$transaction((tx) => debts.openWindowsForNewSchedule(tx, h.houseId, sched.weekStart, sched.createdAt));
+      await fx.prisma.$transaction((tx) => debts.openWindowsForNewSchedule(tx, events.outbox(), h.houseId, sched.weekStart, sched.createdAt));
       const d = (await debtsOf(h))[0];
       expect(d.pickOpensAt).toEqual(createdAt);
       expect(d.pickDeadlineAt).toEqual(new Date(createdAt.getTime() + 48 * HOUR));
+    });
+
+    it('B5: lịch tuần sau được sinh khi ca gốc đã DONE → mở cửa sổ và phát chore_debt:pick_requested tới creditor (đường cron và đường sinh bù)', async () => {
+      for (const via of ['ensureSchedule', 'cron'] as const) {
+        const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
+        for (const title of ['A', 'B', 'C', 'D']) {
+          await fx.prisma.chore.create({ data: { houseId: h.houseId, title, weight: 2, recurrenceDays: [7], dueTime: '21:00' } });
+        }
+        // Ca gốc (Mai làm hộ Thiện) thuộc tuần hiện tại, đã DONE; lịch tuần sau chưa có.
+        const monday = currentWeekStart();
+        const cover = await makeAssignment(fx, h, { assignee: 2, status: 'DONE', occurrenceDate: monday, dueAt: new Date(`${monday}T12:00:00Z`) }, { weight: 3 });
+        const d = await oldDebt(h, 1, 2, 3, { coverAssignmentId: cover.id });
+        expect(d.pickOpensAt).toBeNull();
+
+        const send = vi.spyOn(events, 'send');
+        const next = addDays(monday, 7);
+        if (via === 'ensureSchedule') await fx.app.get(ScheduleService).ensureSchedule(h.houseId, next, 'CRON');
+        else await fx.app.get(ChoreCronService).generateNextWeek(new Date(), [h.houseId]);
+
+        const after = await fx.prisma.choreDebt.findUniqueOrThrow({ where: { id: d.id } });
+        const sched = await fx.prisma.weekSchedule.findFirstOrThrow({ where: { houseId: h.houseId, weekStart: dateOf(next) } });
+        expect(after.pickOpensAt).toEqual(sched.createdAt);
+        expect(after.pickDeadlineAt!.getTime() - after.pickOpensAt!.getTime()).toBe(48 * HOUR);
+        const pick = send.mock.calls.filter((c) => (c[1] as { type: string }).type === 'chore_debt:pick_requested');
+        expect(pick.map((c) => c[0]), via).toEqual([`user:${h.users[2].id}`]);
+        vi.restoreAllMocks();
+      }
     });
 
     it('Admin FORCE_DONE ca gốc cũng mở cửa sổ', async () => {

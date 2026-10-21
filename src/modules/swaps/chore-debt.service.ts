@@ -184,7 +184,7 @@ export class ChoreDebtService {
   }
 
   /** Lịch tuần `weekStart` vừa được sinh: mở cửa sổ cho các nợ có ca gốc DONE ở tuần liền trước mà đang chờ lịch. */
-  async openWindowsForNewSchedule(tx: Db, houseId: string, weekStart: Date, generatedAt: Date): Promise<number> {
+  async openWindowsForNewSchedule(tx: Db, outbox: Outbox, houseId: string, weekStart: Date, generatedAt: Date): Promise<number> {
     const prevWeek = dateOf(addDays(dsOf(weekStart), -7));
     const waiting = await tx.choreDebt.findMany({ where: { houseId, status: 'OPEN', pickOpensAt: null } });
     if (!waiting.length) return 0;
@@ -196,7 +196,7 @@ export class ChoreDebtService {
     let opened = 0;
     for (const debt of waiting) {
       if (!ready.has(debt.coverAssignmentId)) continue;
-      await this.openPickWindow(tx, null, debt, generatedAt, generatedAt);
+      await this.openPickWindow(tx, outbox, debt, generatedAt, generatedAt);
       opened++;
     }
     return opened;
