@@ -88,6 +88,37 @@ describe('Hết hạn và leo thang (e2e)', () => {
     expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: slot.id } })).assigneeId).toBe(mid(h, 0));
   });
 
+  it('A1: ADD_REWARD từ yêu cầu PAYBACK tạo yêu cầu mới COVER + GIFT (Chợ ca), không chép PAYBACK và không lỗi 500', async () => {
+    const h = await fx.houseWith(['Quân', 'Hùng', 'Mai']);
+    const slot = await makeAssignment(fx, h, { assignee: 0, dueAt: at(120) }, { weight: 2 });
+    const { swap } = await swaps.create(
+      member(h, 0),
+      { type: 'COVER', fromAssignmentId: slot.id, compensation: 'PAYBACK', targetMemberId: mid(h, 1), acknowledgedWarnings: [] },
+      randomUUID(),
+    );
+    await expire(h, at(25));
+
+    const res = await escalate(h, 0, swap.id, { action: 'ADD_REWARD', rewardAmount: 50000, rewardNote: 'Bao trà sữa' }, at(25));
+    expect(res.newSwap).toMatchObject({ type: 'COVER', compensation: 'GIFT', rewardAmount: 50000, rewardNote: 'Bao trà sữa', market: true, targetMemberId: null });
+    expect(await row(res.newSwap!.id)).toMatchObject({ compensation: 'GIFT', status: 'PENDING' });
+    // Nhận giúp Chợ ca mới không sinh nợ ca (đó là quà, không phải làm bù).
+    await fx.as(h.users[2].token).patch(`/api/v1/swaps/${res.newSwap!.id}/accept`).set('Idempotency-Key', randomUUID()).expect(200);
+    expect(await fx.prisma.choreDebt.count({ where: { houseId: h.houseId } })).toBe(0);
+  });
+
+  it('A1: ADD_REWARD chỉ có ghi chú mới (không có số tiền) từ yêu cầu PAYBACK cũng thành GIFT', async () => {
+    const h = await fx.houseWith(['Quân', 'Hùng']);
+    const slot = await makeAssignment(fx, h, { assignee: 0, dueAt: at(120) }, { weight: 2 });
+    const { swap } = await swaps.create(
+      member(h, 0),
+      { type: 'COVER', fromAssignmentId: slot.id, compensation: 'PAYBACK', acknowledgedWarnings: [] },
+      randomUUID(),
+    );
+    await expire(h, at(25));
+    const res = await escalate(h, 0, swap.id, { action: 'ADD_REWARD', rewardNote: 'Bao ly cà phê' }, at(25));
+    expect(res.newSwap).toMatchObject({ compensation: 'GIFT', rewardAmount: null, rewardNote: 'Bao ly cà phê' });
+  });
+
   it('ES-02 / ES-15: ADD_REWARD không tăng quà (và không có lời nhắn mới) trả 422 REWARD_NOT_INCREASED', async () => {
     const { h, swapId } = await market();
     await expire(h, at(25));

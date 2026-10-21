@@ -148,7 +148,8 @@ export class SwapEscalationService {
         requesterMemberId: m.id,
         targetMemberId,
         fromAssignmentId: slot.id,
-        compensation: swap.compensation,
+        // ADD_REWARD luôn là quà (spec 5.6: COVER + GIFT, Chợ ca); RESEND giữ nguyên cách đền đáp của yêu cầu cũ.
+        compensation: dto.action === 'ADD_REWARD' ? 'GIFT' : swap.compensation,
         rewardAmount,
         rewardNote,
         reason: swap.reason,
