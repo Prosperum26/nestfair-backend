@@ -2,16 +2,19 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { coded } from '../../common/coded-exception.js';
 import type { ChoreAssignment, ChoreSwapRequest } from '../../generated/prisma/client.js';
-import type { HouseRole, SwapResolution, SwapStatus } from '../../generated/prisma/enums.js';
+import type { HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ActivityService } from '../activity/activity.service.js';
 import { EventsService, type Outbox } from '../events/events.service.js';
 import { actorOfMember } from '../events/actor.js';
-import { type Db, dsOf } from '../chores/schedule-context.js';
-import { dueAtOf, toDateStr } from '../chores/week.js';
+import { AuditService } from '../chores/audit.service.js';
+import { SwapLifecycleService } from './swap-lifecycle.service.js';
+import { dateOf, type Db, dsOf } from '../chores/schedule-context.js';
+import { dueAtOf, toDateStr, weekStartFromKey } from '../chores/week.js';
 import { expiresAtFor } from './algorithms/swap-rules.js';
 import type { CreateSwapDto } from './dto/create-swap.dto.js';
 import type { SwapDto, SwapSlotDto } from './dto/swap-response.dto.js';
+import { closeSwap } from './swap-close.js';
 import { fillMessage, SWAP_ERRORS } from './swap-errors.js';
 import {
   contextWindow,
@@ -68,6 +71,8 @@ export class SwapsService {
     private readonly prisma: PrismaService,
     private readonly events: EventsService,
     private readonly activity: ActivityService,
+    private readonly audit: AuditService,
+    private readonly lifecycle: SwapLifecycleService,
   ) {}
 
   // ---------------------------------------------------------------- tạo
@@ -317,6 +322,19 @@ export class SwapsService {
     return (await this.present([out], m))[0];
   }
 
+  /** Admin hủy mọi yêu cầu PENDING của một tuần (SW-34), ghi nhật ký. */
+  async cancelPendingInWeek(m: Actor, weekKey: string): Promise<{ cancelled: number }> {
+    const weekStart = dateOf(weekStartFromKey(weekKey));
+    const outbox = this.events.outbox();
+    const ids = await this.prisma.$transaction(async (tx) => {
+      const cancelled = await this.lifecycle.cancelPendingInWeek(tx, outbox, m.houseId, weekStart, 'ADMIN_OVERRIDE');
+      if (cancelled.length) await this.audit.log(m.houseId, m.id, 'CANCEL_PENDING_SWAPS', { weekKey, swapIds: cancelled }, {}, tx);
+      return cancelled;
+    }, TX);
+    outbox.flush();
+    return { cancelled: ids.length };
+  }
+
   // ------------------------------------------------------------ danh sách
 
   /**
@@ -383,24 +401,9 @@ export class SwapsService {
 
   // ------------------------------------------------------------ dùng chung
 
-  /**
-   * Rời PENDING: ghi trạng thái cuối và xóa SwapLock trong cùng transaction (spec 4.4).
-   * Trả dòng đã cập nhật.
-   */
-  async closeSwap(
-    tx: Db,
-    swap: ChoreSwapRequest,
-    status: Exclude<SwapStatus, 'PENDING'>,
-    resolution: SwapResolution,
-    extra: Partial<ChoreSwapRequest> = {},
-  ): Promise<ChoreSwapRequest> {
-    const { id: _id, ...rest } = extra;
-    const updated = await tx.choreSwapRequest.update({
-      where: { id: swap.id },
-      data: { ...rest, status, resolution, closedAt: extra.closedAt ?? new Date(), version: { increment: 1 } },
-    });
-    await tx.swapLock.deleteMany({ where: { swapRequestId: swap.id } });
-    return updated;
+  /** Xem `closeSwap` (swap-close.ts). */
+  closeSwap(...args: Parameters<typeof closeSwap>): ReturnType<typeof closeSwap> {
+    return closeSwap(...args);
   }
 
   private async lockSwap(tx: Db, m: Actor, swapId: string): Promise<ChoreSwapRequest | SwapRejection> {

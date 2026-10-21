@@ -10,6 +10,7 @@ import { dateOf } from '../chores/schedule-context.js';
 import { ScheduleService } from '../chores/schedule.service.js';
 import { addDays, currentWeekStart, toDateStr } from '../chores/week.js';
 import { EventsService } from '../events/events.service.js';
+import { SwapLifecycleService } from '../swaps/swap-lifecycle.service.js';
 import { CloudinaryService, publicIdFromUrl } from '../uploads/cloudinary.service.js';
 
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
@@ -45,6 +46,7 @@ export class ChoreCronService implements OnApplicationBootstrap {
     private readonly cloudinary: CloudinaryService,
     private readonly config: ConfigService<Env, true>,
     private readonly activity: ActivityService,
+    private readonly swapLifecycle: SwapLifecycleService,
   ) {}
 
   private get isTest() {
@@ -106,6 +108,13 @@ export class ChoreCronService implements OnApplicationBootstrap {
   async markMissed(now: Date = new Date(), houseIds?: string[]): Promise<number> {
     const outbox = this.events.outbox();
     const rows = await this.prisma.$transaction(async (tx) => {
+      // Khóa các yêu cầu đổi ca dính tới ca sắp đánh MISSED trước (cùng thứ tự khóa với accept).
+      const candidates = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+        SELECT a.id FROM chore_assignments a JOIN houses h ON h.id = a."houseId"
+        WHERE a.status IN ('TODO', 'REJECTED')
+          AND a."dueAt" + h."choreGraceHours" * interval '1 hour' < ${now.toISOString()}::timestamp
+          ${this.scope(houseIds)}`);
+      await this.swapLifecycle.lockPendingFor(tx, candidates.map((c) => c.id));
       const touched = await tx.$queryRaw<TouchedRow[]>(Prisma.sql`
         WITH due AS (
           SELECT a.id FROM chore_assignments a JOIN houses h ON h.id = a."houseId"
@@ -118,6 +127,7 @@ export class ChoreCronService implements OnApplicationBootstrap {
         FROM due WHERE c.id = due.id
         RETURNING c.id, c."houseId", c."assigneeId"`);
       if (touched.length === 0) return touched;
+      await this.swapLifecycle.cancelPendingForAssignments(tx, outbox, touched.map((r) => r.id), 'SLOT_CHANGED');
 
       const byHouse = new Map<string, string[]>();
       for (const r of touched) byHouse.set(r.houseId, [...(byHouse.get(r.houseId) ?? []), r.id]);

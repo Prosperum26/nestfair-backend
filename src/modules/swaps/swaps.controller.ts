@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, HttpCode, HttpStatus, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -22,9 +22,10 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import type { AuthUser } from '../auth/strategies/jwt.strategy.js';
 import { CurrentMembership } from '../houses/decorators/current-membership.decorator.js';
 import { type HouseMembership, HouseMemberGuard } from '../houses/guards/house-member.guard.js';
+import { HouseRoles, HouseRolesGuard } from '../houses/guards/house-roles.guard.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { CreateSwapDto } from './dto/create-swap.dto.js';
-import { ListSwapsQuery } from './dto/list-swaps.query.js';
+import { CancelPendingQuery, ListSwapsQuery } from './dto/list-swaps.query.js';
 import { RejectSwapDto } from './dto/reject-swap.dto.js';
 import { SwapOptionsDto, SwapOptionsQuery } from './dto/swap-options.dto.js';
 import { AcceptSwapResultDto, SwapDto, SwapSummaryDto } from './dto/swap-response.dto.js';
@@ -73,7 +74,7 @@ export class SwapAssignmentController {
 @ApiUnauthorizedResponse()
 @ApiForbiddenResponse({ description: 'Không phải thành viên nhà này' })
 @ApiParam({ name: 'houseId', format: 'uuid' })
-@UseGuards(JwtAuthGuard, HouseMemberGuard)
+@UseGuards(JwtAuthGuard, HouseMemberGuard, HouseRolesGuard)
 @Controller('houses/:houseId/swaps')
 export class SwapsHouseController {
   constructor(private readonly swaps: SwapsService) {}
@@ -104,6 +105,15 @@ export class SwapsHouseController {
   @ApiBadRequestResponse({ description: 'scope không hợp lệ' })
   list(@CurrentMembership() m: HouseMembership, @Query() q: ListSwapsQuery): Promise<SwapDto[]> {
     return this.swaps.list(m, q.scope);
+  }
+
+  @Delete('pending')
+  @HouseRoles('ADMIN')
+  @ApiOperation({ summary: 'Trưởng phòng hủy mọi yêu cầu đổi ca đang chờ của một tuần (trước khi xáo lại lịch)' })
+  @ApiOkResponse({ schema: { type: 'object', properties: { cancelled: { type: 'number' } } } })
+  @ApiBadRequestResponse({ description: 'week sai định dạng' })
+  cancelPending(@CurrentMembership() m: HouseMembership, @Query() q: CancelPendingQuery): Promise<{ cancelled: number }> {
+    return this.swaps.cancelPendingInWeek(m, q.week);
   }
 
   @Get('summary')

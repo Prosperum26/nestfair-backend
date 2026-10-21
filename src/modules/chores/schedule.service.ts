@@ -142,6 +142,16 @@ export class ScheduleService {
         where: { scheduleId: sched.id, status: { notIn: ['TODO', 'UNASSIGNED', 'CANCELLED'] } },
       });
       if (activity > 0) throw coded(HttpStatus.CONFLICT, 'SCHEDULE_HAS_ACTIVITY', 'Đã có ca được nộp hoặc duyệt, không thể xáo lại cả lịch.');
+      const slotIds = (await tx.choreAssignment.findMany({ where: { scheduleId: sched.id }, select: { id: true } })).map((a) => a.id);
+      const pendingSwaps = await tx.choreSwapRequest.findMany({
+        where: { status: 'PENDING', OR: [{ fromAssignmentId: { in: slotIds } }, { toAssignmentId: { in: slotIds } }] },
+        select: { id: true },
+      });
+      if (pendingSwaps.length > 0) {
+        throw coded(HttpStatus.CONFLICT, 'SWAP_PENDING_IN_WEEK', 'Tuần này còn yêu cầu đổi ca đang chờ. Hãy hủy chúng trước khi xáo lại.', {
+          swapIds: pendingSwaps.map((s) => s.id),
+        });
+      }
       if (sched.rerollCount >= MAX_REROLLS) throw coded(HttpStatus.CONFLICT, 'REROLL_LIMIT', `Mỗi lịch chỉ được xáo lại tối đa ${MAX_REROLLS} lần.`);
 
       const current = await tx.choreAssignment.findMany({ where: { scheduleId: sched.id } });

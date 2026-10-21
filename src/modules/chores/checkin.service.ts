@@ -3,6 +3,7 @@ import { coded } from '../../common/coded-exception.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ActivityService } from '../activity/activity.service.js';
 import { actorOfUser } from '../events/actor.js';
+import { SwapLifecycleService } from '../swaps/swap-lifecycle.service.js';
 import { EventsService } from '../events/events.service.js';
 import { CloudinaryService } from '../uploads/cloudinary.service.js';
 import { sha256, type UploadedImage, validateImageFile } from '../uploads/image-validation.js';
@@ -23,6 +24,7 @@ export class CheckinService {
     private readonly cloudinary: CloudinaryService,
     private readonly events: EventsService,
     private readonly activity: ActivityService,
+    private readonly swapLifecycle: SwapLifecycleService,
   ) {}
 
   /**
@@ -83,6 +85,8 @@ export class CheckinService {
       const selfAttested = others === 0;
       const status = selfAttested ? 'DONE' : 'PENDING_VERIFY';
       const count = await this.prisma.$transaction(async (tx) => {
+        // Khóa yêu cầu đổi ca trước khi sửa ca (cùng thứ tự khóa với accept).
+        await this.swapLifecycle.lockPendingFor(tx, [assignment.id]);
         const res = await tx.choreAssignment.updateMany({
           where: { id: assignment.id, status: { in: ['TODO', 'REJECTED'] }, disputed: false },
           data: {
@@ -99,6 +103,7 @@ export class CheckinService {
           },
         });
         if (res.count === 1) {
+          await this.swapLifecycle.cancelOnCheckin(tx, outbox, assignment.id);
           await this.activity.record(tx, outbox, {
             houseId: assignment.houseId,
             type: 'chore.submitted',
