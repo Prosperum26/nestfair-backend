@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { vi } from 'vitest';
 import { addDays, toDateStr } from '../src/modules/chores/week.js';
 import { ChoreCronService } from '../src/modules/scheduler/chore-cron.service.js';
+import { WheelService } from '../src/modules/wheel/wheel.service.js';
 import { CloudinaryService } from '../src/modules/uploads/cloudinary.service.js';
 import { HOUR, makeAssignment, png } from './support/assignment-fixture.js';
 import { createFixture } from './support/house-fixture.js';
@@ -82,6 +83,37 @@ describe('ChoreAssignment.version (e2e)', () => {
     const a = await makeAssignment(fx, h, { assignee: 1, occurrenceDate: date, dueAt: inDays(3) });
     await bumps(h, a.id, () => fx.as(h.users[0].token).post(`/api/v1/houses/${h.houseId}/breaks`, { startDate: date, endDate: date }).expect(201));
     expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: a.id } })).status).toBe('CANCELLED');
+  });
+
+  it('tắt việc: ca TODO của việc đó bị hủy và version tăng; yêu cầu đổi ca đang chờ trên ca đó bị 409 SLOT_CHANGED khi accept', async () => {
+    const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+    const a = await makeAssignment(fx, h, { assignee: 1, dueAt: inDays(5) });
+    const b = await makeAssignment(fx, h, { assignee: 2, dueAt: inDays(5) });
+    const created = await fx
+      .as(h.users[1].token)
+      .post(`/api/v1/houses/${h.houseId}/swaps`, { type: 'EXCHANGE', fromAssignmentId: a.id, toAssignmentId: b.id, acknowledgedWarnings: [] })
+      .set('Idempotency-Key', randomUUID())
+      .expect(201);
+
+    await bumps(h, a.id, () => fx.as(h.users[0].token).patch(`/api/v1/houses/${h.houseId}/chores/${a.choreId}`, { isActive: false }).expect(200));
+    expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: a.id } })).status).toBe('CANCELLED');
+    const res = await fx.as(h.users[2].token).patch(`/api/v1/swaps/${created.body.id}/accept`).set('Idempotency-Key', randomUUID()).expect(409);
+    expect(res.body.code).toBe('SLOT_CHANGED');
+  });
+
+  it('hủy vòng quay (void): ca WHEEL bị CANCELLED và version tăng', async () => {
+    const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
+    const spin = await fx
+      .as(h.users[1].token)
+      .post(`/api/v1/houses/${h.houseId}/wheel/spin`, { taskTitle: 'Mua nước bình', participantIds: [h.users[2].id, h.users[3].id], dueAt: new Date(Date.now() + 2 * HOUR).toISOString() })
+      .set('Idempotency-Key', randomUUID())
+      .expect(201);
+    await fx.app.get(WheelService).reveal(spin.body.spinId);
+    const log = await fx.prisma.luckyWheelLog.findUniqueOrThrow({ where: { id: spin.body.spinId } });
+    expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: log.assignmentId } })).source).toBe('WHEEL');
+
+    await bumps(h, log.assignmentId, () => fx.as(h.users[0].token).post(`/api/v1/wheel/spins/${spin.body.spinId}/void`, { reason: 'Gõ sai tên việc' }).expect(200));
+    expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: log.assignmentId } })).status).toBe('CANCELLED');
   });
 
   it('REASSIGN ca đang có yêu cầu PENDING: accept sau đó bị 409 SLOT_CHANGED và khóa được nhả', async () => {
