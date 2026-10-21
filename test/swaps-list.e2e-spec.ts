@@ -153,6 +153,31 @@ describe('Danh sách yêu cầu đổi ca và số đếm (e2e)', () => {
     expect((await fx.as(house.users[1].token).get(`/api/v1/houses/${house.houseId}/swaps/summary`)).body).toMatchObject({ incoming: 0, market: 0 });
   });
 
+  it('B2: OUTGOING chỉ giữ yêu cầu EXPIRED chưa được chọn leo thang; sau SELF hoặc ADD_REWARD dòng cũ biến mất', async () => {
+    const house = await fx.houseWith(['Hùng', 'Thiện']);
+    const expired = async (date: string) => {
+      const m = await market(house, 0, date);
+      await fx.prisma.choreSwapRequest.update({
+        where: { id: m.id },
+        data: { status: 'EXPIRED', resolution: 'EXPIRED_NO_TAKER', expiresAt: new Date(Date.now() - 60_000), escalationDeadline: new Date(Date.now() + 5 * 3_600_000) },
+      });
+      return m.id;
+    };
+    const ids = async () => (await list(house, 0, 'OUTGOING').expect(200)).body.map((s: any) => s.id).sort();
+    const escalate = (id: string, body: object) =>
+      fx.as(house.users[0].token).post(`/api/v1/swaps/${id}/escalate`, body).set('Idempotency-Key', randomUUID());
+
+    const a = await expired(day(4));
+    const b = await expired(day(5));
+    expect(await ids()).toEqual([a, b].sort());
+
+    await escalate(a, { action: 'SELF' }).expect(200);
+    expect(await ids()).toEqual([b]);
+
+    const res = await escalate(b, { action: 'ADD_REWARD', rewardAmount: 50000 }).expect(200);
+    expect(await ids()).toEqual([res.body.newSwap.id]);
+  });
+
   it('scope sai nhận 400; người ngoài nhà nhận 403/404', async () => {
     const house = await fx.houseWith(['Hùng', 'Thiện']);
     await list(house, 0, 'ALL').expect(400);

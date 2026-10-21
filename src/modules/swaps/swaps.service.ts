@@ -405,7 +405,7 @@ export class SwapsService {
           : {
               houseId: m.houseId,
               requesterMemberId: m.id,
-              OR: [{ status: 'PENDING' as const, expiresAt: { gt: now } }, { status: 'EXPIRED' as const, escalationDeadline: { gt: now } }],
+              OR: [{ status: 'PENDING' as const, expiresAt: { gt: now } }, { status: 'EXPIRED' as const, escalationChoice: null, escalationDeadline: { gt: now } }],
             };
     const rows = await this.prisma.choreSwapRequest.findMany({
       where,
