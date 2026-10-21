@@ -10,6 +10,7 @@ import { dateOf } from '../chores/schedule-context.js';
 import { ScheduleService } from '../chores/schedule.service.js';
 import { addDays, currentWeekStart, toDateStr } from '../chores/week.js';
 import { EventsService } from '../events/events.service.js';
+import { ChoreDebtService } from '../swaps/chore-debt.service.js';
 import { SwapLifecycleService } from '../swaps/swap-lifecycle.service.js';
 import { CloudinaryService, publicIdFromUrl } from '../uploads/cloudinary.service.js';
 
@@ -47,6 +48,7 @@ export class ChoreCronService implements OnApplicationBootstrap {
     private readonly config: ConfigService<Env, true>,
     private readonly activity: ActivityService,
     private readonly swapLifecycle: SwapLifecycleService,
+    private readonly debts: ChoreDebtService,
   ) {}
 
   private get isTest() {
@@ -219,6 +221,7 @@ export class ChoreCronService implements OnApplicationBootstrap {
       const perHouse = new Map<string, number>();
       for (const r of touched) {
         outbox.toHouse(r.houseId, 'chore:verified', { assignmentId: r.id, weekKey: r.weekKey, assigneeId: r.assigneeId, status: 'DONE', verifyMode: 'AUTO_APPROVED' });
+        await this.debts.onAssignmentDone(tx, outbox, r.id, now);
         await this.audit.log(r.houseId, null, 'AUTO_APPROVE', { afterHours: AUTO_APPROVE_HOURS }, { assignmentId: r.id }, tx);
         perHouse.set(r.houseId, (perHouse.get(r.houseId) ?? 0) + 1);
       }

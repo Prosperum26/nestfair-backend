@@ -3,6 +3,7 @@ import { coded } from '../../common/coded-exception.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ActivityService } from '../activity/activity.service.js';
 import { actorOfUser } from '../events/actor.js';
+import { ChoreDebtService } from '../swaps/chore-debt.service.js';
 import { SwapLifecycleService } from '../swaps/swap-lifecycle.service.js';
 import { EventsService } from '../events/events.service.js';
 import { CloudinaryService } from '../uploads/cloudinary.service.js';
@@ -25,6 +26,7 @@ export class CheckinService {
     private readonly events: EventsService,
     private readonly activity: ActivityService,
     private readonly swapLifecycle: SwapLifecycleService,
+    private readonly debts: ChoreDebtService,
   ) {}
 
   /**
@@ -104,6 +106,7 @@ export class CheckinService {
         });
         if (res.count === 1) {
           await this.swapLifecycle.cancelOnCheckin(tx, outbox, assignment.id);
+          if (selfAttested) await this.debts.onAssignmentDone(tx, outbox, assignment.id, now);
           await this.activity.record(tx, outbox, {
             houseId: assignment.houseId,
             type: 'chore.submitted',

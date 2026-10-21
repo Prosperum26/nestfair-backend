@@ -6,6 +6,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { ActivityService, type ActivityType } from '../activity/activity.service.js';
 import { actorOfUser } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
+import { ChoreDebtService } from '../swaps/chore-debt.service.js';
 import { loadAssignmentForUser } from './assignment-access.js';
 import { ASSIGNMENT_INCLUDE, toAssignmentDto } from './assignment.mapper.js';
 import { AuditService } from './audit.service.js';
@@ -31,6 +32,7 @@ export class VerifyService {
     private readonly events: EventsService,
     private readonly audit: AuditService,
     private readonly activity: ActivityService,
+    private readonly debts: ChoreDebtService,
   ) {}
 
   private fetch(id: string) {
@@ -73,6 +75,7 @@ export class VerifyService {
     await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.choreAssignment.updateMany({ where: { id: assignment.id, status: 'PENDING_VERIFY' }, data });
       if (count === 0) throw this.stateChanged('Ca này vừa được người khác xử lý.');
+      if (approved) await this.debts.onAssignmentDone(tx, outbox, assignment.id, now);
       // Không kèm lý do từ chối lên ticker (mục 10.3).
       await this.activity.record(tx, outbox, {
         houseId: assignment.houseId,
@@ -180,6 +183,7 @@ export class VerifyService {
       const { count } = await tx.choreAssignment.updateMany({ where: { id: assignment.id, status: assignment.status }, data });
       if (count === 0) throw this.stateChanged('Ca này vừa được người khác xử lý.');
       const to = await tx.choreAssignment.findUniqueOrThrow({ where: { id: assignment.id }, select: { status: true } });
+      if (dto.action === 'FORCE_DONE') await this.debts.onAssignmentDone(tx, outbox, assignment.id, now);
       await this.audit.log(
         assignment.houseId,
         membership.id,

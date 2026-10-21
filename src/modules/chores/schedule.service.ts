@@ -7,6 +7,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { EventsService } from '../events/events.service.js';
 import { generateWeek, type GenResult } from './algorithms/schedule-generator.js';
 import { rollingLoad } from './algorithms/load.js';
+import { ChoreDebtService } from '../swaps/chore-debt.service.js';
 import { AuditService } from './audit.service.js';
 import { buildGenContext, dateOf, type Db, dsOf } from './schedule-context.js';
 import { createScheduleRows, scheduleFields, storeSlots } from './schedule-store.js';
@@ -39,6 +40,7 @@ export class ScheduleService {
     private readonly prisma: PrismaService,
     private readonly events: EventsService,
     private readonly audit: AuditService,
+    private readonly debts: ChoreDebtService,
   ) {}
 
   /** H5: chỉ sinh cho tuần hiện tại hoặc tuần kế tiếp. */
@@ -308,6 +310,8 @@ export class ScheduleService {
     const res = generateWeek(ctx.input);
     const started = weekStart <= toDateStr(now);
     const status = res.status === 'EMPTY' ? 'EMPTY' : started ? 'LOCKED' : 'PUBLISHED';
-    return createScheduleRows(tx, houseId, weekStart, by, seed, ctx, res, status);
+    const created = await createScheduleRows(tx, houseId, weekStart, by, seed, ctx, res, status);
+    if (status !== 'EMPTY') await this.debts.openWindowsForNewSchedule(tx, houseId, created.weekStart, created.createdAt);
+    return created;
   }
 }
