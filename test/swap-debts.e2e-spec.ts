@@ -54,55 +54,98 @@ describe('Sổ nợ ca (e2e)', () => {
   }
   const debtsOf = (h: House) => fx.prisma.choreDebt.findMany({ where: { houseId: h.houseId }, orderBy: { createdAt: 'asc' } });
 
-  describe('cấn trừ ngược chiều (R-SWAP-7)', () => {
-    it('net > 0: nợ cũ PAID (OFFSET), nợ mới người nhờ → người nhận với weight = net', async () => {
+  describe('cấn trừ ngược chiều (R-SWAP-7, D17: chỉ có hiệu lực khi ca gốc DONE)', () => {
+    /** Người làm hộ nộp ảnh, người khác (người nhờ) duyệt: ca gốc DONE. */
+    async function finishCover(h: House, slotId: string, verifier: number) {
+      await fx.prisma.choreAssignment.update({ where: { id: slotId }, data: { status: 'PENDING_VERIFY', submittedAt: new Date() } });
+      await fx.as(h.users[verifier].token).patch(`/api/v1/assignments/${slotId}/verify`, { decision: 'APPROVED' }).expect(200);
+    }
+    const byId = async (h: House) => new Map((await debtsOf(h)).map((d) => [d.id, d]));
+
+    it('net > 0: accept chưa đụng nợ cũ; khi ca gốc DONE nợ cũ PAID (OFFSET), nợ mới còn weight = net', async () => {
       const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
       // Mai (2) đang nợ Quân (3) 3 điểm; Quân nhờ Mai làm hộ ca 4 điểm.
       const old = await oldDebt(h, 2, 3, 3);
-      const { swapId } = await coverPayback(h, 3, 2, 4);
+      const { slot, swapId } = await coverPayback(h, 3, 2, 4);
 
-      const rows = await debtsOf(h);
-      expect(rows).toHaveLength(2);
-      expect(rows.find((d) => d.id === old.id)).toMatchObject({ status: 'PAID', closeReason: 'OFFSET' });
-      expect(rows.find((d) => d.id === old.id)!.settledAt).not.toBeNull();
-      expect(rows.find((d) => d.id !== old.id)).toMatchObject({ status: 'OPEN', weight: 1, debtorMemberId: member(h, 3), creditorMemberId: member(h, 2) });
+      const afterAccept = await byId(h);
+      expect(afterAccept.size).toBe(2);
+      expect(afterAccept.get(old.id)).toMatchObject({ status: 'OPEN', weight: 3, closeReason: null });
+      const fresh = [...afterAccept.values()].find((d) => d.id !== old.id)!;
+      expect(fresh).toMatchObject({ status: 'OPEN', weight: 4, debtorMemberId: member(h, 3), creditorMemberId: member(h, 2) });
+      expect((await fx.prisma.choreSwapRequest.findUniqueOrThrow({ where: { id: swapId } })).offsetDebtId).toBeNull();
+
+      await finishCover(h, slot.id, 3);
+      const afterDone = await byId(h);
+      expect(afterDone.get(old.id)).toMatchObject({ status: 'PAID', closeReason: 'OFFSET' });
+      expect(afterDone.get(old.id)!.settledAt).not.toBeNull();
+      expect(afterDone.get(fresh.id)).toMatchObject({ status: 'OPEN', weight: 1 });
       expect((await fx.prisma.choreSwapRequest.findUniqueOrThrow({ where: { id: swapId } })).offsetDebtId).toBe(old.id);
     });
 
-    it('net = 0: nợ cũ PAID, không tạo nợ mới', async () => {
+    it('net = 0: khi ca gốc DONE cả nợ cũ lẫn nợ mới đóng PAID (OFFSET), không còn nợ mở', async () => {
       const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
       const old = await oldDebt(h, 1, 0, 3);
-      await coverPayback(h, 0, 1, 3);
-      const rows = await debtsOf(h);
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ id: old.id, status: 'PAID', closeReason: 'OFFSET' });
+      const { slot } = await coverPayback(h, 0, 1, 3);
+      expect((await byId(h)).get(old.id)!.status).toBe('OPEN');
+      await finishCover(h, slot.id, 0);
+      const rows = [...(await byId(h)).values()];
+      expect(rows).toHaveLength(2);
+      expect(rows.every((d) => d.status === 'PAID' && d.closeReason === 'OFFSET')).toBe(true);
     });
 
-    it('net < 0: nợ cũ giảm weight còn |net|, vẫn OPEN, không tạo nợ mới', async () => {
+    it('net < 0: khi ca gốc DONE nợ cũ giảm còn |net| (vẫn OPEN), nợ mới đóng PAID (OFFSET)', async () => {
       const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
       const old = await oldDebt(h, 1, 0, 3);
-      await coverPayback(h, 0, 1, 2);
-      const rows = await debtsOf(h);
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ id: old.id, status: 'OPEN', weight: 1 });
+      const { slot } = await coverPayback(h, 0, 1, 2);
+      expect((await byId(h)).get(old.id)).toMatchObject({ status: 'OPEN', weight: 3 });
+      await finishCover(h, slot.id, 0);
+      const map = await byId(h);
+      expect(map.get(old.id)).toMatchObject({ status: 'OPEN', weight: 1 });
+      const fresh = [...map.values()].find((d) => d.id !== old.id)!;
+      expect(fresh).toMatchObject({ status: 'PAID', closeReason: 'OFFSET' });
     });
 
-    it('nhiều nợ cũ: cấn trừ cũ nhất trước', async () => {
+    it('ca gốc bị MISSED: không cấn trừ, nợ cũ vẫn OPEN nguyên vẹn, nợ mới bị hủy', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
+      const old = await oldDebt(h, 2, 3, 3);
+      const { slot } = await coverPayback(h, 3, 2, 4);
+      await fx.prisma.choreAssignment.update({ where: { id: slot.id }, data: { dueAt: new Date(Date.now() - 5 * HOUR) } });
+      expect(await fx.app.get(ChoreCronService).markMissed(new Date(), [h.houseId])).toBe(1);
+      const map = await byId(h);
+      expect(map.get(old.id)).toMatchObject({ status: 'OPEN', weight: 3, closeReason: null });
+      expect([...map.values()].find((d) => d.id !== old.id)).toMatchObject({ status: 'CANCELLED', closeReason: 'COVER_MISSED' });
+    });
+
+    it('ca gốc bị Admin CANCEL: không cấn trừ, nợ cũ vẫn OPEN', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+      const old = await oldDebt(h, 1, 2, 3);
+      const { slot } = await coverPayback(h, 2, 1, 4);
+      await fx.as(h.users[0].token).patch(`/api/v1/assignments/${slot.id}/override`, { action: 'CANCEL', reason: 'Hủy ca gốc' }).expect(200);
+      const map = await byId(h);
+      expect(map.get(old.id)).toMatchObject({ status: 'OPEN', weight: 3 });
+      expect([...map.values()].find((d) => d.id !== old.id)!.status).toBe('CANCELLED');
+    });
+
+    it('nhiều nợ cũ: khi ca gốc DONE cấn trừ cũ nhất trước', async () => {
       const h = await fx.houseWith(['Hùng', 'Thiện']);
       const first = await oldDebt(h, 1, 0, 2, { createdAt: new Date(Date.now() - 3 * 24 * HOUR) });
       const second = await oldDebt(h, 1, 0, 2, { createdAt: new Date(Date.now() - 1 * 24 * HOUR) });
-      await coverPayback(h, 0, 1, 3);
-      const byId = new Map((await debtsOf(h)).map((d) => [d.id, d]));
-      expect(byId.get(first.id)).toMatchObject({ status: 'PAID', closeReason: 'OFFSET' });
-      // 3 điểm mới: trừ hết nợ cũ nhất (2), còn 1 điểm trừ vào nợ kế tiếp (2 → 1), không nợ mới.
-      expect(byId.get(second.id)).toMatchObject({ status: 'OPEN', weight: 1 });
-      expect(byId.size).toBe(2);
+      const { slot } = await coverPayback(h, 0, 1, 3);
+      await finishCover(h, slot.id, 0);
+      const map = await byId(h);
+      expect(map.get(first.id)).toMatchObject({ status: 'PAID', closeReason: 'OFFSET' });
+      // 3 điểm mới: trừ hết nợ cũ nhất (2), còn 1 điểm trừ vào nợ kế tiếp (2 → 1); nợ mới đóng.
+      expect(map.get(second.id)).toMatchObject({ status: 'OPEN', weight: 1 });
+      expect(map.size).toBe(3);
+      expect([...map.values()].find((d) => d.id !== first.id && d.id !== second.id)).toMatchObject({ status: 'PAID', closeReason: 'OFFSET' });
     });
 
-    it('nợ cũ đã có ca bù được chọn thì không cấn trừ, tạo nợ riêng đủ weight', async () => {
+    it('nợ cũ đã có ca bù được chọn trước khi ca gốc DONE thì không cấn trừ, nợ mới giữ đủ weight', async () => {
       const h = await fx.houseWith(['Hùng', 'Thiện']);
       const old = await oldDebt(h, 1, 0, 3, { paybackAssignmentId: randomUUID() });
-      await coverPayback(h, 0, 1, 3);
+      const { slot } = await coverPayback(h, 0, 1, 3);
+      await finishCover(h, slot.id, 0);
       const rows = await debtsOf(h);
       expect(rows).toHaveLength(2);
       expect(rows.find((d) => d.id === old.id)).toMatchObject({ status: 'OPEN', weight: 3 });
@@ -112,10 +155,12 @@ describe('Sổ nợ ca (e2e)', () => {
     it('nợ cùng chiều (người nhận không nợ người nhờ) không bị đụng tới', async () => {
       const h = await fx.houseWith(['Hùng', 'Thiện']);
       const sameWay = await oldDebt(h, 0, 1, 2); // Hùng nợ Thiện; Hùng lại nhờ Thiện
-      await coverPayback(h, 0, 1, 2);
+      const { slot } = await coverPayback(h, 0, 1, 2);
+      await finishCover(h, slot.id, 0);
       const rows = await debtsOf(h);
       expect(rows).toHaveLength(2);
       expect(rows.find((d) => d.id === sameWay.id)).toMatchObject({ status: 'OPEN', weight: 2 });
+      expect(rows.find((d) => d.id !== sameWay.id)).toMatchObject({ status: 'OPEN', weight: 2 });
     });
   });
 

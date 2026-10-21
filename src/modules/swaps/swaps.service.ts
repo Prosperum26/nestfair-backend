@@ -293,21 +293,17 @@ export class SwapsService {
     // Áp dụng. Luôn giữ originalAssigneeId; tăng version; ghi yêu cầu đã tạo ra `source` hiện tại.
     const bump = { swapRequestId: swap.id, version: { increment: 1 } } as const;
     let debtEvent: { debtId: string } | null = null;
-    let paidDebtIds: string[] = [];
-    let offsetDebtId: string | null = null;
     if (to) {
       await tx.choreAssignment.update({ where: { id: from!.id }, data: { assigneeId: to.assigneeId, source: 'SWAP', ...bump } });
       await tx.choreAssignment.update({ where: { id: to.id }, data: { assigneeId: from!.assigneeId, source: 'SWAP', ...bump } });
     } else {
       await tx.choreAssignment.update({ where: { id: from!.id }, data: { assigneeId: m.id, source: 'COVER', ...bump } });
       if (swap.compensation === 'PAYBACK') {
-        const res = await this.debts.offsetOrCreate(tx, swap, m.id);
-        if (res.created) debtEvent = { debtId: res.created.id };
-        paidDebtIds = res.paidDebtIds;
-        offsetDebtId = res.offsetDebtIds[0] ?? null;
+        const debt = await this.debts.createDebt(tx, swap, m.id);
+        debtEvent = { debtId: debt.id };
       }
     }
-    const closed = await this.closeSwap(tx, swap, 'ACCEPTED', 'ACCEPTED_BY_TARGET', { acceptedById: m.id, acceptedAt: now, acceptIdemKey: idemKey, offsetDebtId });
+    const closed = await this.closeSwap(tx, swap, 'ACCEPTED', 'ACCEPTED_BY_TARGET', { acceptedById: m.id, acceptedAt: now, acceptIdemKey: idemKey });
 
     const actor = await actorOfMember(tx, m.id);
     const users = await this.memberUsers(tx, [swap.requesterMemberId]);
@@ -325,7 +321,6 @@ export class SwapsService {
     if (debtEvent) {
       outbox.toHouse(swap.houseId, 'chore_debt:created', { debtId: debtEvent.debtId, debtorName: requesterName, creditorName: actor.name }, actor);
     }
-    for (const debtId of paidDebtIds) outbox.toHouse(swap.houseId, 'chore_debt:paid', { debtId }, actor);
     return { kind: 'OK', swap: closed };
   }
 

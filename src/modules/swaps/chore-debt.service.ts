@@ -40,59 +40,73 @@ export class ChoreDebtService {
   ) {}
 
   /**
-   * COVER + PAYBACK được chấp nhận. Nếu người nhận đang nợ chính người nhờ (nợ OPEN, chưa có ca bù được chọn)
-   * thì cấn trừ, cũ nhất trước (R-SWAP-7, bảng 5.4); phần còn lại mới thành nợ mới.
+   * COVER + PAYBACK được chấp nhận: người nhờ nợ người làm hộ đủ độ nặng của ca. Chưa cấn trừ gì ở đây: cấn trừ
+   * ngược chiều (R-SWAP-7) chỉ có hiệu lực khi ca gốc DONE (D17), xem `applyOffset`.
    * `creditorMemberId` là người làm hộ (người nhận).
    */
-  async offsetOrCreate(
-    tx: Db,
-    swap: ChoreSwapRequest,
-    creditorMemberId: string,
-  ): Promise<{ created: ChoreDebt | null; offsetDebtIds: string[]; paidDebtIds: string[] }> {
-    // Khóa các khoản nợ cũ theo thứ tự cũ nhất trước rồi đọc lại: không ai khác (chọn ca bù, tha nợ…) đổi chúng giữa chừng.
-    await tx.$queryRaw`
-      SELECT id FROM chore_debts
-      WHERE "houseId" = ${swap.houseId}::uuid AND status = 'OPEN'
-        AND "debtorMemberId" = ${creditorMemberId}::uuid AND "creditorMemberId" = ${swap.requesterMemberId}::uuid
-        AND "paybackAssignmentId" IS NULL
-      ORDER BY "createdAt", id FOR UPDATE`;
-    const old = await tx.choreDebt.findMany({
-      where: {
-        houseId: swap.houseId,
-        status: 'OPEN',
-        debtorMemberId: creditorMemberId,
-        creditorMemberId: swap.requesterMemberId,
-        paybackAssignmentId: null,
-      },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    });
-    let remaining = swap.fromWeightSnapshot;
-    const offsetDebtIds: string[] = [];
-    const paidDebtIds: string[] = [];
-    for (const d of old) {
-      if (remaining <= 0) break;
-      offsetDebtIds.push(d.id);
-      if (remaining >= d.weight) {
-        await tx.choreDebt.update({ where: { id: d.id }, data: { status: 'PAID', closeReason: 'OFFSET', settledAt: new Date() } });
-        paidDebtIds.push(d.id);
-        remaining -= d.weight;
-      } else {
-        await tx.choreDebt.update({ where: { id: d.id }, data: { weight: d.weight - remaining } });
-        remaining = 0;
-      }
-    }
-    if (remaining <= 0) return { created: null, offsetDebtIds, paidDebtIds };
-    const created = await tx.choreDebt.create({
+  async createDebt(tx: Db, swap: ChoreSwapRequest, creditorMemberId: string): Promise<ChoreDebt> {
+    return tx.choreDebt.create({
       data: {
         houseId: swap.houseId,
         debtorMemberId: swap.requesterMemberId,
         creditorMemberId,
         swapRequestId: swap.id,
         coverAssignmentId: swap.fromAssignmentId!,
-        weight: remaining,
+        weight: swap.fromWeightSnapshot,
       },
     });
-    return { created, offsetDebtIds, paidDebtIds };
+  }
+
+  /**
+   * Ca gốc của `debt` vừa DONE: cấn trừ với các nợ ngược chiều (người nhờ đang là chủ nợ của chính người làm hộ,
+   * nợ OPEN, chưa có ca bù được chọn), cũ nhất trước (bảng 5.4). Phần được cấn trừ trừ vào cả hai phía:
+   * nợ cũ đủ thì PAID (OFFSET), không đủ thì giảm weight; nợ mới hết weight thì PAID (OFFSET).
+   * Trả nợ mới nếu còn lại một phần, hoặc null nếu đã cấn trừ hết.
+   */
+  async applyOffset(tx: Db, outbox: Outbox, debt: ChoreDebt, now: Date): Promise<ChoreDebt | null> {
+    // Khóa nợ mới và các nợ cũ cùng lúc, theo thứ tự cũ nhất trước rồi đọc lại.
+    await tx.$queryRaw`
+      SELECT id FROM chore_debts
+      WHERE "houseId" = ${debt.houseId}::uuid AND status = 'OPEN'
+        AND (id = ${debt.id}::uuid OR (
+          "debtorMemberId" = ${debt.creditorMemberId}::uuid AND "creditorMemberId" = ${debt.debtorMemberId}::uuid
+          AND "paybackAssignmentId" IS NULL))
+      ORDER BY "createdAt", id FOR UPDATE`;
+    const current = await tx.choreDebt.findUniqueOrThrow({ where: { id: debt.id } });
+    if (current.status !== 'OPEN') return null;
+    const old = await tx.choreDebt.findMany({
+      where: {
+        houseId: debt.houseId,
+        status: 'OPEN',
+        id: { not: debt.id },
+        debtorMemberId: debt.creditorMemberId,
+        creditorMemberId: debt.debtorMemberId,
+        paybackAssignmentId: null,
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    let remaining = current.weight;
+    const offsetIds: string[] = [];
+    for (const d of old) {
+      if (remaining <= 0) break;
+      offsetIds.push(d.id);
+      if (remaining >= d.weight) {
+        await tx.choreDebt.update({ where: { id: d.id }, data: { status: 'PAID', closeReason: 'OFFSET', settledAt: now } });
+        outbox.toHouse(d.houseId, 'chore_debt:paid', { debtId: d.id });
+        remaining -= d.weight;
+      } else {
+        await tx.choreDebt.update({ where: { id: d.id }, data: { weight: d.weight - remaining } });
+        remaining = 0;
+      }
+    }
+    if (offsetIds.length === 0) return current;
+    await tx.choreSwapRequest.updateMany({ where: { id: current.swapRequestId }, data: { offsetDebtId: offsetIds[0] } });
+    if (remaining <= 0) {
+      await tx.choreDebt.update({ where: { id: current.id }, data: { status: 'PAID', closeReason: 'OFFSET', settledAt: now } });
+      outbox.toHouse(current.houseId, 'chore_debt:paid', { debtId: current.id });
+      return null;
+    }
+    return tx.choreDebt.update({ where: { id: current.id }, data: { weight: remaining } });
   }
 
   /**
@@ -126,7 +140,10 @@ export class ChoreDebtService {
     if (!debts.length) return;
     const slot = await tx.choreAssignment.findUnique({ where: { id: assignmentId }, select: { weekStart: true } });
     if (!slot) return;
-    for (const debt of debts) {
+    for (const original of debts) {
+      // D17: cấn trừ chỉ có hiệu lực khi ca gốc DONE; nợ đã cấn trừ hết thì không còn cửa sổ chọn bù.
+      const debt = await this.applyOffset(tx, outbox, original, now);
+      if (!debt) continue;
       const schedule = await tx.weekSchedule.findUnique({
         where: { houseId_weekStart: { houseId: debt.houseId, weekStart: dateOf(addDays(dsOf(slot.weekStart), 7)) } },
       });
