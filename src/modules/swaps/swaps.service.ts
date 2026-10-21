@@ -234,10 +234,7 @@ export class SwapsService {
     }
 
     if (swap.expiresAt.getTime() <= now.getTime()) {
-      // COVER: người gửi còn đến `dueAt − 1h` để chọn leo thang (spec 5.6).
-      const coverSlot = swap.type === 'COVER' && swap.fromAssignmentId ? await tx.choreAssignment.findUnique({ where: { id: swap.fromAssignmentId }, select: { dueAt: true } }) : null;
-      const expired = await this.closeSwap(tx, swap, 'EXPIRED', 'EXPIRED_NO_TAKER', coverSlot ? { escalationDeadline: new Date(coverSlot.dueAt.getTime() - HOUR) } : {});
-      this.notifyExpired(outbox, await this.memberUsers(tx, [swap.requesterMemberId]), expired);
+      await this.expireInTx(tx, swap, outbox);
       return { kind: 'REJECT', rejection: rejection('SWAP_EXPIRED') };
     }
 
@@ -347,8 +344,7 @@ export class SwapsService {
       if (swap.status !== 'PENDING') return rejection('SWAP_NOT_PENDING');
       if (swap.targetMemberId !== m.id) return rejection('NOT_SWAP_TARGET');
       if (swap.expiresAt.getTime() <= now.getTime()) {
-        await this.closeSwap(tx, swap, 'EXPIRED', 'EXPIRED_NO_TAKER');
-        this.notifyExpired(outbox, await this.memberUsers(tx, [swap.requesterMemberId]), swap);
+        await this.expireInTx(tx, swap, outbox);
         return rejection('SWAP_EXPIRED');
       }
       const closed = await this.closeSwap(tx, swap, 'REJECTED', 'REJECTED_BY_TARGET', { rejectReason: reason || null });
@@ -462,6 +458,16 @@ export class SwapsService {
   /** Xem `closeSwap` (swap-close.ts). */
   closeSwap(...args: Parameters<typeof closeSwap>): ReturnType<typeof closeSwap> {
     return closeSwap(...args);
+  }
+
+  /**
+   * Yêu cầu đã quá `expiresAt` mà cron chưa chạy, bị phát hiện lúc có người bấm: đóng EXPIRED như cron.
+   * COVER: người gửi còn đến `dueAt − 1h` để chọn leo thang (spec 5.6).
+   */
+  private async expireInTx(tx: Db, swap: ChoreSwapRequest, outbox: Outbox): Promise<void> {
+    const coverSlot = swap.type === 'COVER' && swap.fromAssignmentId ? await tx.choreAssignment.findUnique({ where: { id: swap.fromAssignmentId }, select: { dueAt: true } }) : null;
+    const expired = await this.closeSwap(tx, swap, 'EXPIRED', 'EXPIRED_NO_TAKER', coverSlot ? { escalationDeadline: new Date(coverSlot.dueAt.getTime() - HOUR) } : {});
+    this.notifyExpired(outbox, await this.memberUsers(tx, [swap.requesterMemberId]), expired);
   }
 
   private async lockSwap(tx: Db, m: Actor, swapId: string): Promise<ChoreSwapRequest | SwapRejection> {

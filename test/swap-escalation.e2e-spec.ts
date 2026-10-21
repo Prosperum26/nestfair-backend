@@ -119,6 +119,23 @@ describe('Hết hạn và leo thang (e2e)', () => {
     expect(res.newSwap).toMatchObject({ compensation: 'GIFT', rewardAmount: null, rewardNote: 'Bao ly cà phê' });
   });
 
+  it('B1: người nhận từ chối khi yêu cầu đã quá hạn (cron chưa chạy): EXPIRED có escalationDeadline, socket mang hạn đó, sau hạn cron ghi SELF_DEFAULT', async () => {
+    const { h, slot, swapId } = await market(['Quân', 'Hùng', 'Mai'], { target: 1 });
+    await fx.prisma.choreSwapRequest.update({ where: { id: swapId }, data: { expiresAt: new Date(Date.now() - 60_000) } });
+    const send = vi.spyOn(events, 'send');
+
+    const res = await fx.as(h.users[1].token).patch(`/api/v1/swaps/${swapId}/reject`, {}).expect(410);
+    expect(res.body.code).toBe('SWAP_EXPIRED');
+    const deadline = new Date(slot.dueAt.getTime() - HOUR);
+    expect(await row(swapId)).toMatchObject({ status: 'EXPIRED', resolution: 'EXPIRED_NO_TAKER', escalationDeadline: deadline });
+    const expired = send.mock.calls.map((c) => c[1] as { type: string; payload: { escalationDeadline: Date | string | null } }).filter((e) => e.type === 'swap:expired');
+    expect(expired).toHaveLength(1);
+    expect(new Date(expired[0].payload.escalationDeadline!).getTime()).toBe(deadline.getTime());
+
+    await expire(h, new Date(deadline.getTime() + 60_000));
+    expect((await row(swapId)).escalationChoice).toBe('SELF_DEFAULT');
+  });
+
   it('ES-02 / ES-15: ADD_REWARD không tăng quà (và không có lời nhắn mới) trả 422 REWARD_NOT_INCREASED', async () => {
     const { h, swapId } = await market();
     await expire(h, at(25));
