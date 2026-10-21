@@ -90,7 +90,8 @@ export class CheckinService {
         // Khóa yêu cầu đổi ca trước khi sửa ca (cùng thứ tự khóa với accept).
         await this.swapLifecycle.lockPendingFor(tx, [assignment.id]);
         const res = await tx.choreAssignment.updateMany({
-          where: { id: assignment.id, status: { in: ['TODO', 'REJECTED'] }, disputed: false },
+          // assigneeId: ca có thể đã chuyển cho người khác trong lúc ảnh đang upload.
+          where: { id: assignment.id, assigneeId: membership.id, status: { in: ['TODO', 'REJECTED'] }, disputed: false },
           data: {
             version: { increment: 1 },
             status,
@@ -128,6 +129,9 @@ export class CheckinService {
         const fresh = await this.prisma.choreAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: ASSIGNMENT_INCLUDE });
         if (idempotencyKey && fresh.checkinKey === idempotencyKey && ['PENDING_VERIFY', 'DONE'].includes(fresh.status)) {
           return toAssignmentDto(fresh);
+        }
+        if (fresh.assigneeId !== membership.id) {
+          throw coded(HttpStatus.CONFLICT, 'ASSIGNMENT_STATE_CHANGED', 'Ca này vừa chuyển cho người khác nên ảnh chưa được ghi, hãy tải lại.');
         }
         throw coded(HttpStatus.CONFLICT, 'ASSIGNMENT_STATE_CHANGED', 'Ca này vừa được nộp rồi.');
       }
