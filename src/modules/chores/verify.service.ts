@@ -154,6 +154,19 @@ export class VerifyService {
       case 'REASSIGN': {
         const target = await this.prisma.houseMember.findFirst({ where: { userId: dto.userId, houseId: assignment.houseId, leftAt: null }, select: { id: true } });
         if (!target) throw coded(HttpStatus.BAD_REQUEST, 'NOT_ELIGIBLE_ASSIGNEE', 'Người nhận ca không còn ở trong nhà.');
+        // R-SWAP-3 / DB-21: người nhận (kể cả ca bù đã chọn) không được có hai ca cùng việc trong một ngày.
+        const twin = await this.prisma.choreAssignment.findFirst({
+          where: {
+            houseId: assignment.houseId,
+            assigneeId: target.id,
+            choreId: assignment.choreId,
+            occurrenceDate: assignment.occurrenceDate,
+            id: { not: assignment.id },
+            status: { in: ['TODO', 'PENDING_VERIFY', 'REJECTED', 'DONE'] },
+          },
+          select: { id: true },
+        });
+        if (twin) throw coded(HttpStatus.UNPROCESSABLE_ENTITY, 'DUPLICATE_CHORE_SAME_DAY', `Người này đã có ca ${assignment.titleSnapshot} hôm đó.`);
         data = {
           assigneeId: target.id,
           source: assignment.source === 'WHEEL' ? 'WHEEL' : 'REASSIGN',

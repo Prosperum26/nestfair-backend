@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { ChoreDebt, ChoreSwapRequest } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../chores/audit.service.js';
 import { dateOf, type Db, dsOf } from '../chores/schedule-context.js';
 import { addDays } from '../chores/week.js';
 import type { Outbox } from '../events/events.service.js';
@@ -9,6 +10,8 @@ import type { DebtDto, DebtPhase } from './dto/debt-response.dto.js';
 const HOUR = 3_600_000;
 /** Người được làm bù có 48 giờ để chọn ca (spec 5.4). */
 export const PICK_WINDOW_HOURS = 48;
+/** Sau bấy nhiêu lần ca bù bị bỏ lỡ thì chuyển cho Admin. */
+export const MAX_PICK_ATTEMPTS = 3;
 
 interface Viewer {
   id: string;
@@ -17,7 +20,10 @@ interface Viewer {
 /** Sổ nợ ca (làm bù). */
 @Injectable()
 export class ChoreDebtService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   /**
    * COVER + PAYBACK được chấp nhận. Nếu người nhận đang nợ chính người nhờ (nợ OPEN, chưa có ca bù được chọn)
@@ -84,6 +90,12 @@ export class ChoreDebtService {
 
   /** Ca `assignmentId` vừa DONE: nếu là ca gốc của một nợ OPEN thì mở cửa sổ chọn bù (khi lịch tuần kế đã có). */
   async onAssignmentDone(tx: Db, outbox: Outbox, assignmentId: string, now: Date): Promise<void> {
+    // Ca bù hoàn thành → nợ được trả.
+    const paid = await tx.choreDebt.findMany({ where: { paybackAssignmentId: assignmentId, status: 'OPEN' } });
+    for (const d of paid) {
+      await tx.choreDebt.update({ where: { id: d.id }, data: { status: 'PAID', settledAt: now } });
+      outbox.toHouse(d.houseId, 'chore_debt:paid', { debtId: d.id });
+    }
     const debts = await tx.choreDebt.findMany({ where: { coverAssignmentId: assignmentId, status: 'OPEN', pickOpensAt: null } });
     if (!debts.length) return;
     const slot = await tx.choreAssignment.findUnique({ where: { id: assignmentId }, select: { weekStart: true } });
@@ -94,6 +106,37 @@ export class ChoreDebtService {
       });
       if (!schedule || schedule.status === 'EMPTY') continue; // chờ lịch tuần kế được sinh
       await this.openPickWindow(tx, outbox, debt, now, schedule.createdAt);
+    }
+  }
+
+  /**
+   * Các ca vừa bị đánh MISSED (spec 5.4):
+   * - ca bù bị bỏ lỡ → nợ về OPEN, chọn lại (tối đa 2 lần); lần thứ ba chuyển cho Admin, không tự tha;
+   * - ca gốc được làm hộ bị bỏ lỡ → nợ bị hủy (COVER_MISSED).
+   */
+  async onAssignmentsMissed(tx: Db, outbox: Outbox, assignmentIds: string[], now: Date): Promise<void> {
+    if (!assignmentIds.length) return;
+    const missedPaybacks = await tx.choreDebt.findMany({ where: { status: 'OPEN', paybackAssignmentId: { in: assignmentIds } } });
+    for (const d of missedPaybacks) {
+      const attempts = d.pickAttempts + 1;
+      if (attempts >= MAX_PICK_ATTEMPTS) {
+        await tx.choreDebt.update({ where: { id: d.id }, data: { pickAttempts: attempts, paybackAssignmentId: null, pickOpensAt: null, pickDeadlineAt: null } });
+        await this.audit.log(d.houseId, null, 'PAYBACK_NEEDS_ADMIN', { debtId: d.id, attempts }, { assignmentId: d.paybackAssignmentId ?? undefined }, tx);
+        const admins = await tx.houseMember.findMany({ where: { houseId: d.houseId, role: 'ADMIN', leftAt: null }, select: { userId: true } });
+        for (const a of admins) outbox.toUser(a.userId, 'chore_debt:pick_requested', { debtId: d.id, needsAdmin: true }, { houseId: d.houseId });
+        continue;
+      }
+      const reopened = await tx.choreDebt.update({
+        where: { id: d.id },
+        data: { pickAttempts: attempts, paybackAssignmentId: null, pickOpensAt: now, pickDeadlineAt: new Date(now.getTime() + PICK_WINDOW_HOURS * HOUR) },
+      });
+      const creditor = await tx.houseMember.findUnique({ where: { id: d.creditorMemberId }, select: { userId: true } });
+      if (creditor) outbox.toUser(creditor.userId, 'chore_debt:pick_requested', { debtId: d.id, pickDeadlineAt: reopened.pickDeadlineAt }, { houseId: d.houseId });
+    }
+    const covered = await tx.choreDebt.findMany({ where: { status: 'OPEN', coverAssignmentId: { in: assignmentIds } } });
+    for (const d of covered) {
+      await tx.choreDebt.update({ where: { id: d.id }, data: { status: 'CANCELLED', closeReason: 'COVER_MISSED', settledAt: now } });
+      outbox.toHouse(d.houseId, 'chore_debt:forgiven', { debtId: d.id, closeReason: 'COVER_MISSED' });
     }
   }
 

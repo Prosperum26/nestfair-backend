@@ -4,7 +4,8 @@ import { AuditService } from '../chores/audit.service.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { EventsModule } from '../events/events.module.js';
 import { HousesModule } from '../houses/houses.module.js';
-import { ChoreDebtsController } from './chore-debts.controller.js';
+import { ChoreDebtActionsController, ChoreDebtsController } from './chore-debts.controller.js';
+import { PaybackService } from './payback.service.js';
 import { SwapActionsController, SwapAssignmentController, SwapsHouseController } from './swaps.controller.js';
 import { ChoreDebtService } from './chore-debt.service.js';
 import { SwapLifecycleService } from './swap-lifecycle.service.js';
@@ -14,8 +15,8 @@ import { SwapsService } from './swaps.service.js';
 
 @Module({
   imports: [AuthModule, HousesModule, EventsModule, ActivityModule],
-  controllers: [SwapAssignmentController, SwapsHouseController, SwapActionsController, ChoreDebtsController],
-  providers: [SwapValidator, SwapOptionsService, SwapsService, SwapLifecycleService, AuditService, ChoreDebtService],
-  exports: [SwapValidator, SwapsService, SwapLifecycleService, ChoreDebtService],
+  controllers: [SwapAssignmentController, SwapsHouseController, SwapActionsController, ChoreDebtsController, ChoreDebtActionsController],
+  providers: [SwapValidator, SwapOptionsService, SwapsService, SwapLifecycleService, AuditService, ChoreDebtService, PaybackService],
+  exports: [SwapValidator, SwapsService, SwapLifecycleService, ChoreDebtService, PaybackService],
 })
 export class SwapsModule {}

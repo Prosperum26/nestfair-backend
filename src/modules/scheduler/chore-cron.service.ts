@@ -10,6 +10,7 @@ import { dateOf } from '../chores/schedule-context.js';
 import { ScheduleService } from '../chores/schedule.service.js';
 import { addDays, currentWeekStart, toDateStr } from '../chores/week.js';
 import { EventsService } from '../events/events.service.js';
+import { PaybackService } from '../swaps/payback.service.js';
 import { ChoreDebtService } from '../swaps/chore-debt.service.js';
 import { SwapLifecycleService } from '../swaps/swap-lifecycle.service.js';
 import { CloudinaryService, publicIdFromUrl } from '../uploads/cloudinary.service.js';
@@ -49,6 +50,7 @@ export class ChoreCronService implements OnApplicationBootstrap {
     private readonly activity: ActivityService,
     private readonly swapLifecycle: SwapLifecycleService,
     private readonly debts: ChoreDebtService,
+    private readonly payback: PaybackService,
   ) {}
 
   private get isTest() {
@@ -130,6 +132,7 @@ export class ChoreCronService implements OnApplicationBootstrap {
         RETURNING c.id, c."houseId", c."assigneeId"`);
       if (touched.length === 0) return touched;
       await this.swapLifecycle.cancelPendingForAssignments(tx, outbox, touched.map((r) => r.id), 'SLOT_CHANGED');
+      await this.debts.onAssignmentsMissed(tx, outbox, touched.map((r) => r.id), now);
 
       const byHouse = new Map<string, string[]>();
       for (const r of touched) byHouse.set(r.houseId, [...(byHouse.get(r.houseId) ?? []), r.id]);
@@ -306,6 +309,16 @@ export class ChoreCronService implements OnApplicationBootstrap {
   @Cron('*/15 * * * *', { timeZone: TIME_ZONE })
   cronAutoApprove() {
     return this.guarded('autoApprove', () => this.autoApprove());
+  }
+
+  /** Nợ ca quá hạn chọn bù thì tự chọn giúp (spec 5.7). */
+  async autoPickPayback(now: Date = new Date(), houseIds?: string[]): Promise<number> {
+    return this.payback.autoPick(now, houseIds);
+  }
+
+  @Cron('*/15 * * * *', { timeZone: TIME_ZONE })
+  cronAutoPickPayback() {
+    return this.guarded('autoPickPayback', () => this.autoPickPayback());
   }
 
   @Cron('*/10 * * * *', { timeZone: TIME_ZONE })
