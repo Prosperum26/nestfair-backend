@@ -213,8 +213,9 @@ export function evaluateExchange(ctx: SwapContext, input: ExchangeInput): Violat
 /** Kiểm ràng buộc cứng cho COVER (R-SWAP-1 … 5, 8, 9, 11, 13, 14). */
 export function evaluateCover(ctx: SwapContext, input: CoverInput): Violation[] {
   const { requesterMemberId, from, targetMemberId, compensation, now } = input;
+  const creating = (input.phase ?? 'create') === 'create';
   const out = new Collector();
-  if (ctx.activeCount < 2) out.add(violation('SWAP_NEEDS_2_MEMBERS'));
+  if (creating && ctx.activeCount < 2) out.add(violation('SWAP_NEEDS_2_MEMBERS'));
   if (targetMemberId && targetMemberId === requesterMemberId) out.add(violation('SWAP_SELF'));
   if (ctx.lockedIds.has(from.id)) out.add(violation('SLOT_LOCKED'));
   const state = stateViolation(ctx, from, now);
@@ -225,8 +226,8 @@ export function evaluateCover(ctx: SwapContext, input: CoverInput): Violation[] 
   if (amount !== null && (compensation !== 'GIFT' || !Number.isInteger(amount) || amount < 1000 || amount > 500_000 || amount % 1000 !== 0)) {
     out.add(violation('REWARD_OUT_OF_RANGE'));
   }
-  if (tooLateToRequest(now, [from.dueAt])) out.add(violation('SWAP_TOO_LATE'));
-  if (targetMemberId && isUrgentCover(now, from.dueAt)) out.add(violation('URGENT_MARKET_ONLY'));
+  if (creating && tooLateToRequest(now, [from.dueAt])) out.add(violation('SWAP_TOO_LATE'));
+  if (creating && targetMemberId && isUrgentCover(now, from.dueAt)) out.add(violation('URGENT_MARKET_ONLY'));
   if (targetMemberId && targetMemberId !== requesterMemberId) {
     const target = ctx.members.get(targetMemberId);
     if (!target || target.leftAt) {

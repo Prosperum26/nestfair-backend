@@ -15,6 +15,7 @@ import type { SwapDto, SwapSlotDto } from './dto/swap-response.dto.js';
 import { fillMessage, SWAP_ERRORS } from './swap-errors.js';
 import {
   contextWindow,
+  evaluateCover,
   evaluateExchange,
   exchangeWarnings,
   loadSwapContext,
@@ -314,6 +315,70 @@ export class SwapsService {
     outbox.flush();
     if (out instanceof SwapRejection) throw out.toHttp();
     return (await this.present([out], m))[0];
+  }
+
+  // ------------------------------------------------------------ danh sách
+
+  /**
+   * Danh sách theo phạm vi. Lọc `expiresAt > now` nên yêu cầu quá hạn mà cron chưa chạy không hiện ra.
+   * OUTGOING còn giữ yêu cầu vừa hết hạn đang chờ người gửi chọn leo thang. MARKET sắp theo hạn gần nhất (D13).
+   */
+  async list(m: Actor, scope: 'INCOMING' | 'OUTGOING' | 'MARKET', now: Date = new Date()): Promise<SwapDto[]> {
+    const live = { houseId: m.houseId, status: 'PENDING' as const, expiresAt: { gt: now } };
+    const where =
+      scope === 'INCOMING'
+        ? { ...live, targetMemberId: m.id }
+        : scope === 'MARKET'
+          ? { ...live, targetMemberId: null }
+          : {
+              houseId: m.houseId,
+              requesterMemberId: m.id,
+              OR: [{ status: 'PENDING' as const, expiresAt: { gt: now } }, { status: 'EXPIRED' as const, escalationDeadline: { gt: now } }],
+            };
+    const rows = await this.prisma.choreSwapRequest.findMany({
+      where,
+      orderBy: scope === 'MARKET' ? [{ expiresAt: 'asc' }, { id: 'asc' }] : [{ createdAt: 'desc' }, { id: 'asc' }],
+      take: 100,
+    });
+    const dtos = await this.present(rows, m);
+    if (scope !== 'MARKET') return dtos;
+    const eligibility = await this.marketEligibility(m, rows, now);
+    for (const d of dtos) d.eligibility = eligibility.get(d.id);
+    return dtos;
+  }
+
+  /** Người xem có nhận giúp được từng yêu cầu Chợ ca không, và nếu không thì vì sao. */
+  private async marketEligibility(m: Actor, rows: ChoreSwapRequest[], now: Date) {
+    const out = new Map<string, { canAccept: boolean; reasonCode?: string; reasonText?: string }>();
+    const slots = await this.prisma.choreAssignment.findMany({ where: { id: { in: rows.map((r) => r.fromAssignmentId).filter((x): x is string => !!x) } } });
+    if (!slots.length) return out;
+    const win = contextWindow(slots);
+    const ctx = await loadSwapContext(this.prisma, m.houseId, win.from, win.to);
+    ctx.lockedIds = new Set(); // khóa của chính yêu cầu Chợ ca không được tính là vướng
+    for (const r of rows) {
+      const from = slots.find((s) => s.id === r.fromAssignmentId);
+      if (!from) continue;
+      if (r.requesterMemberId === m.id) {
+        const spec = SWAP_ERRORS.CANNOT_ACCEPT_OWN;
+        out.set(r.id, { canAccept: false, reasonCode: 'CANNOT_ACCEPT_OWN', reasonText: spec.message });
+        continue;
+      }
+      const v = evaluateCover(ctx, { requesterMemberId: r.requesterMemberId, from, targetMemberId: m.id, compensation: r.compensation ?? 'GIFT', now, phase: 'accept' });
+      out.set(r.id, v.length ? { canAccept: false, reasonCode: v[0].code, reasonText: v[0].message } : { canAccept: true });
+    }
+    return out;
+  }
+
+  /** Số đếm cho widget Dashboard (khớp độ dài các danh sách tương ứng). */
+  async summary(m: Actor, now: Date = new Date()) {
+    const live = { houseId: m.houseId, status: 'PENDING' as const, expiresAt: { gt: now } };
+    const [incoming, market, debtsOwedByMe, debtsOwedToMe] = await Promise.all([
+      this.prisma.choreSwapRequest.count({ where: { ...live, targetMemberId: m.id } }),
+      this.prisma.choreSwapRequest.count({ where: { ...live, targetMemberId: null } }),
+      this.prisma.choreDebt.count({ where: { houseId: m.houseId, debtorMemberId: m.id, status: 'OPEN' } }),
+      this.prisma.choreDebt.count({ where: { houseId: m.houseId, creditorMemberId: m.id, status: 'OPEN' } }),
+    ]);
+    return { incoming, market, debtsOwedByMe, debtsOwedToMe };
   }
 
   // ------------------------------------------------------------ dùng chung

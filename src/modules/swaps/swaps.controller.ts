@@ -24,9 +24,10 @@ import { CurrentMembership } from '../houses/decorators/current-membership.decor
 import { type HouseMembership, HouseMemberGuard } from '../houses/guards/house-member.guard.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { CreateSwapDto } from './dto/create-swap.dto.js';
+import { ListSwapsQuery } from './dto/list-swaps.query.js';
 import { RejectSwapDto } from './dto/reject-swap.dto.js';
 import { SwapOptionsDto, SwapOptionsQuery } from './dto/swap-options.dto.js';
-import { AcceptSwapResultDto, SwapDto } from './dto/swap-response.dto.js';
+import { AcceptSwapResultDto, SwapDto, SwapSummaryDto } from './dto/swap-response.dto.js';
 import { loadSwapForUser } from './swap-access.js';
 import { SwapOptionsService } from './swap-options.service.js';
 import { SwapsService } from './swaps.service.js';
@@ -95,6 +96,21 @@ export class SwapsHouseController {
     const { created, swap } = await this.swaps.create(m, dto, requireKey(key));
     res.status(created ? HttpStatus.CREATED : HttpStatus.OK);
     return swap;
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'Danh sách yêu cầu theo phạm vi: INCOMING (gửi tới bạn), OUTGOING (bạn gửi), MARKET (Chợ ca, kèm eligibility)' })
+  @ApiOkResponse({ type: [SwapDto] })
+  @ApiBadRequestResponse({ description: 'scope không hợp lệ' })
+  list(@CurrentMembership() m: HouseMembership, @Query() q: ListSwapsQuery): Promise<SwapDto[]> {
+    return this.swaps.list(m, q.scope);
+  }
+
+  @Get('summary')
+  @ApiOperation({ summary: 'Số đếm cho widget Dashboard: chờ bạn trả lời, Chợ ca, nợ ca hai chiều' })
+  @ApiOkResponse({ type: SwapSummaryDto })
+  summary(@CurrentMembership() m: HouseMembership): Promise<SwapSummaryDto> {
+    return this.swaps.summary(m);
   }
 }
 

@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Compensation, SwapResolution, SwapStatus, SwapType } from '../../../generated/prisma/enums.js';
 
 export class SwapSlotDto {
@@ -8,6 +8,19 @@ export class SwapSlotDto {
   @ApiProperty() dueAt: Date;
   @ApiProperty({ minimum: 1, maximum: 5 }) weight: number;
   @ApiProperty({ type: String, nullable: true, format: 'uuid', description: 'HouseMember.id đang giữ ca' }) assigneeId: string | null;
+}
+
+export class EligibilityDto {
+  @ApiProperty() canAccept: boolean;
+  @ApiPropertyOptional() reasonCode?: string;
+  @ApiPropertyOptional({ description: 'Câu tiếng Việt hiển thị' }) reasonText?: string;
+}
+
+export class SwapSummaryDto {
+  @ApiProperty() incoming: number;
+  @ApiProperty() market: number;
+  @ApiProperty() debtsOwedByMe: number;
+  @ApiProperty() debtsOwedToMe: number;
 }
 
 export class SwapDto {
@@ -32,6 +45,7 @@ export class SwapDto {
   @ApiProperty({ type: Date, nullable: true }) acceptedAt: Date | null;
   @ApiProperty({ format: 'uuid' }) rootRequestId: string;
   @ApiProperty({ description: 'true = đăng lên Chợ ca (không có người nhận đích danh)' }) market: boolean;
+  @ApiPropertyOptional({ type: EligibilityDto, description: 'Chỉ có ở scope MARKET: người xem có nhận giúp được không' }) eligibility?: EligibilityDto;
 }
 
 export class AcceptSwapResultDto {
