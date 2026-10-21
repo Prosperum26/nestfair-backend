@@ -25,11 +25,13 @@ import { type HouseMembership, HouseMemberGuard } from '../houses/guards/house-m
 import { HouseRoles, HouseRolesGuard } from '../houses/guards/house-roles.guard.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { CreateSwapDto } from './dto/create-swap.dto.js';
+import { EscalateResultDto, EscalateSwapDto } from './dto/escalate-swap.dto.js';
 import { CancelPendingQuery, ListSwapsQuery } from './dto/list-swaps.query.js';
 import { RejectSwapDto } from './dto/reject-swap.dto.js';
 import { SwapOptionsDto, SwapOptionsQuery } from './dto/swap-options.dto.js';
 import { AcceptSwapResultDto, SwapDto, SwapSummaryDto } from './dto/swap-response.dto.js';
 import { loadSwapForUser } from './swap-access.js';
+import { SwapEscalationService } from './swap-escalation.service.js';
 import { SwapOptionsService } from './swap-options.service.js';
 import { SwapsService } from './swaps.service.js';
 import { SWAP_ERRORS } from './swap-errors.js';
@@ -136,6 +138,7 @@ export class SwapsHouseController {
 export class SwapActionsController {
   constructor(
     private readonly swaps: SwapsService,
+    private readonly escalation: SwapEscalationService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -163,6 +166,24 @@ export class SwapActionsController {
   async reject(@CurrentUser() user: AuthUser, @Param('swapId') swapId: string, @Body() dto: RejectSwapDto): Promise<SwapDto> {
     const { membership } = await loadSwapForUser(this.prisma, user.id, swapId);
     return this.swaps.reject(membership, swapId, dto.reason);
+  }
+
+  @Post('escalate')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Người gửi chọn khi yêu cầu hết hạn mà chưa ai nhận: thêm quà đăng lại, gửi người khác, hoặc tự làm' })
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiOkResponse({ type: EscalateResultDto })
+  @ApiConflictResponse({ description: 'SWAP_NOT_PENDING | SLOT_CHANGED' })
+  @ApiUnprocessableEntityResponse({ description: 'ESCALATE_TOO_LATE | ESCALATE_LIMIT | REWARD_NOT_INCREASED | REWARD_OUT_OF_RANGE | NO_RESEND_CANDIDATE' })
+  async escalate(
+    @CurrentUser() user: AuthUser,
+    @Param('swapId') swapId: string,
+    @Body() dto: EscalateSwapDto,
+    @Headers('idempotency-key') key: string | undefined,
+  ): Promise<EscalateResultDto> {
+    const idemKey = requireKey(key);
+    const { membership } = await loadSwapForUser(this.prisma, user.id, swapId);
+    return this.escalation.escalate(membership, swapId, dto, idemKey);
   }
 
   @Patch('cancel')

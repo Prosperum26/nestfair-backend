@@ -1,0 +1,44 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Cron } from '@nestjs/schedule';
+import type { Env } from '../../config/env.validation.js';
+import { SwapEscalationService } from '../swaps/swap-escalation.service.js';
+
+const TIME_ZONE = 'Asia/Ho_Chi_Minh';
+
+/**
+ * Cron của đổi ca. Logic nằm ở service để test gọi trực tiếp với `now` tiêm vào; hàm `@Cron` chỉ là lớp mỏng.
+ * Mỗi job an toàn khi chạy nhiều instance (`FOR UPDATE SKIP LOCKED`).
+ */
+@Injectable()
+export class SwapCronService {
+  private readonly logger = new Logger(SwapCronService.name);
+
+  constructor(
+    private readonly escalation: SwapEscalationService,
+    private readonly config: ConfigService<Env, true>,
+  ) {}
+
+  private get isTest() {
+    return this.config.get('NODE_ENV', { infer: true }) === 'test';
+  }
+
+  private async guarded(name: string, job: () => Promise<unknown>) {
+    if (this.isTest) return;
+    try {
+      await job();
+    } catch (e) {
+      this.logger.error(`Job ${name} thất bại`, e as Error);
+    }
+  }
+
+  /** Mỗi phút: yêu cầu quá `expiresAt` → EXPIRED. */
+  expireSwaps(now: Date = new Date(), houseIds?: string[]): Promise<number> {
+    return this.escalation.expireDue(now, houseIds);
+  }
+
+  @Cron('* * * * *', { timeZone: TIME_ZONE })
+  cronExpireSwaps() {
+    return this.guarded('expireSwaps', () => this.expireSwaps());
+  }
+}
