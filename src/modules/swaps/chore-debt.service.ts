@@ -5,7 +5,7 @@ import { AuditService } from '../chores/audit.service.js';
 import { dateOf, type Db, dsOf } from '../chores/schedule-context.js';
 import { addDays } from '../chores/week.js';
 import { EventsService, type Outbox } from '../events/events.service.js';
-import type { DebtDto, DebtPhase } from './dto/debt-response.dto.js';
+import type { DebtDto, DebtGroupsResponseDto, DebtPhase } from './dto/debt-response.dto.js';
 
 const HOUR = 3_600_000;
 /** Người được làm bù có 48 giờ để chọn ca (spec 5.4). */
@@ -14,6 +14,10 @@ export const PICK_WINDOW_HOURS = 48;
 export const MAX_PICK_ATTEMPTS = 3;
 /** Nợ chưa xếp được ca bù sau bấy nhiêu ngày thì tha (4 tuần). */
 export const STALE_DAYS = 28;
+/** Nợ đã đóng còn hiện trong sổ bấy nhiêu ngày kể từ `settledAt`. */
+export const CLOSED_VISIBLE_DAYS = 30;
+/** Số nhóm tối đa trong một lần trả về. */
+export const MAX_DEBT_GROUPS = 100;
 
 /** Ca gắn lại khi xáo lịch (xem `pinsForReroll`). */
 export interface RerollPin {
@@ -313,28 +317,48 @@ export class ChoreDebtService {
     return opened;
   }
 
-  /** Sổ nợ OPEN: `mine` = người xem là debtor hoặc creditor, `all` = cả nhà. */
-  async list(m: Viewer & { houseId: string }, scope: 'mine' | 'all', now: Date = new Date()): Promise<DebtDto[]> {
+  /**
+   * Sổ nợ gom theo cặp có hướng (người nợ, người được nợ): "bạn nợ Quân" và "Quân nợ bạn" là hai nhóm, không bù trừ ròng.
+   * Gồm nợ OPEN và nợ đã đóng (PAID, FORGIVEN, CANCELLED) có `settledAt` trong 30 ngày gần nhất.
+   * `mine` = người xem là debtor hoặc creditor, `all` = cả nhà. Nhóm có khoản nợ cũ nhất đứng trước; tối đa 100 nhóm.
+   */
+  async list(m: Viewer & { houseId: string }, scope: 'mine' | 'all', now: Date = new Date()): Promise<DebtGroupsResponseDto> {
+    const since = new Date(now.getTime() - CLOSED_VISIBLE_DAYS * 24 * HOUR);
     const rows = await this.prisma.choreDebt.findMany({
       where: {
         houseId: m.houseId,
-        status: 'OPEN',
-        ...(scope === 'mine' ? { OR: [{ debtorMemberId: m.id }, { creditorMemberId: m.id }] } : {}),
+        AND: [
+          { OR: [{ status: 'OPEN' }, { settledAt: { gte: since } }] },
+          ...(scope === 'mine' ? [{ OR: [{ debtorMemberId: m.id }, { creditorMemberId: m.id }] }] : []),
+        ],
       },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      take: 200,
     });
-    if (!rows.length) return [];
+    if (!rows.length) return { groups: [], truncated: false };
+
+    // Map giữ thứ tự chèn: lần xuất hiện đầu tiên của cặp là khoản cũ nhất của nhóm, nên nhóm cũ nhất đứng trước.
+    const grouped = new Map<string, typeof rows>();
+    for (const d of rows) {
+      const key = `${d.debtorMemberId}|${d.creditorMemberId}`;
+      const list = grouped.get(key);
+      if (list) list.push(d);
+      else grouped.set(key, [d]);
+    }
+    const keys = [...grouped.keys()];
+    const truncated = keys.length > MAX_DEBT_GROUPS;
+    const kept = keys.slice(0, MAX_DEBT_GROUPS).map((k) => grouped.get(k)!);
+    const keptRows = kept.flat();
+
     const [members, slots] = await Promise.all([
       this.prisma.houseMember.findMany({
-        where: { id: { in: rows.flatMap((d) => [d.debtorMemberId, d.creditorMemberId]) } },
+        where: { id: { in: keptRows.flatMap((d) => [d.debtorMemberId, d.creditorMemberId]) } },
         select: { id: true, user: { select: { fullName: true } } },
       }),
-      this.prisma.choreAssignment.findMany({ where: { id: { in: rows.map((d) => d.coverAssignmentId) } } }),
+      this.prisma.choreAssignment.findMany({ where: { id: { in: keptRows.map((d) => d.coverAssignmentId) } } }),
     ]);
     const nameOf = new Map(members.map((x) => [x.id, x.user.fullName]));
     const slotOf = new Map(slots.map((s) => [s.id, s]));
-    return rows.map((d) => {
+    const toDto = (d: (typeof rows)[number]): DebtDto => {
       const cover = slotOf.get(d.coverAssignmentId);
       let phase: DebtPhase = 'WAITING_COVER';
       if (d.paybackAssignmentId) phase = 'PAYBACK_ASSIGNED';
@@ -355,6 +379,20 @@ export class ChoreDebtService {
         paybackAssignmentId: d.paybackAssignmentId,
         createdAt: d.createdAt,
       };
+    };
+
+    const groups = kept.map((debts) => {
+      // Trong nhóm: OPEN trước, rồi createdAt, rồi id (rows đã sắp createdAt, id; sort ổn định chỉ cần đẩy OPEN lên).
+      const ordered = [...debts].sort((x, y) => Number(y.status === 'OPEN') - Number(x.status === 'OPEN'));
+      return {
+        debtorMemberId: debts[0].debtorMemberId,
+        debtorName: nameOf.get(debts[0].debtorMemberId) ?? '',
+        creditorMemberId: debts[0].creditorMemberId,
+        creditorName: nameOf.get(debts[0].creditorMemberId) ?? '',
+        openWeight: debts.filter((d) => d.status === 'OPEN').reduce((n, d) => n + d.weight, 0),
+        debts: ordered.map(toDto),
+      };
     });
+    return { groups, truncated };
   }
 }

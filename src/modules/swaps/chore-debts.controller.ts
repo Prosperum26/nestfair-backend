@@ -20,7 +20,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentMembership } from '../houses/decorators/current-membership.decorator.js';
 import { type HouseMembership, HouseMemberGuard } from '../houses/guards/house-member.guard.js';
 import { ChoreDebtService } from './chore-debt.service.js';
-import { DebtDto, ListDebtsQuery } from './dto/debt-response.dto.js';
+import { DebtGroupsResponseDto, ListDebtsQuery } from './dto/debt-response.dto.js';
 import { PaybackBodyDto, PaybackOptionsDto, PaybackResultDto } from './dto/payback.dto.js';
 import { SWAP_ERRORS } from './swap-errors.js';
 import { PaybackService } from './payback.service.js';
@@ -36,10 +36,12 @@ export class ChoreDebtsController {
   constructor(private readonly debts: ChoreDebtService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Sổ nợ ca đang mở. mine = bạn nợ hoặc được nợ; all = cả nhà' })
-  @ApiOkResponse({ type: [DebtDto] })
+  @ApiOperation({
+    summary: 'Sổ nợ ca gom theo cặp có hướng (người nợ, người được nợ): nợ OPEN và nợ đã đóng trong 30 ngày. mine = bạn nợ hoặc được nợ; all = cả nhà. Tối đa 100 nhóm',
+  })
+  @ApiOkResponse({ type: DebtGroupsResponseDto })
   @ApiBadRequestResponse({ description: 'scope không hợp lệ' })
-  list(@CurrentMembership() m: HouseMembership, @Query() q: ListDebtsQuery): Promise<DebtDto[]> {
+  list(@CurrentMembership() m: HouseMembership, @Query() q: ListDebtsQuery): Promise<DebtGroupsResponseDto> {
     return this.debts.list(m, q.scope);
   }
 }

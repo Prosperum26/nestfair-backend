@@ -37,3 +37,21 @@ export class DebtDto {
   @ApiProperty({ type: String, nullable: true, format: 'uuid' }) paybackAssignmentId: string | null;
   @ApiProperty() createdAt: Date;
 }
+
+export class DebtGroupDto {
+  @ApiProperty({ format: 'uuid', description: 'HouseMember.id người nợ' }) debtorMemberId: string;
+  @ApiProperty() debtorName: string;
+  @ApiProperty({ format: 'uuid', description: 'HouseMember.id người được nợ' }) creditorMemberId: string;
+  @ApiProperty() creditorName: string;
+  @ApiProperty({ minimum: 0, description: 'Tổng weight (độ nặng, đơn vị là ca, không phải VNĐ) của các khoản còn OPEN trong nhóm' })
+  openWeight: number;
+  @ApiProperty({ type: [DebtDto], description: 'OPEN trước, rồi theo createdAt tăng dần, rồi id. Gồm cả khoản đã đóng trong 30 ngày gần nhất' })
+  debts: DebtDto[];
+}
+
+export class DebtGroupsResponseDto {
+  @ApiProperty({ type: [DebtGroupDto], description: 'Nhóm theo cặp có hướng (người nợ, người được nợ); nhóm có khoản nợ cũ nhất đứng trước. Tối đa 100 nhóm' })
+  groups: DebtGroupDto[];
+  @ApiProperty({ description: 'true khi còn nhóm bị cắt do vượt giới hạn 100 nhóm (không nhóm nào bị cắt dở)' })
+  truncated: boolean;
+}

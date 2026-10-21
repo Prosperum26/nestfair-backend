@@ -255,30 +255,140 @@ describe('Sổ nợ ca (e2e)', () => {
     });
   });
 
-  describe('GET /houses/:houseId/chore-debts', () => {
-    it('scope=mine chỉ trả nợ mà người xem là debtor hoặc creditor; scope=all trả cả nhà (T-SW-20)', async () => {
-      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
-      const d = await oldDebt(h, 0, 1, 2); // Hùng nợ Thiện
-      const get = (i: number, scope: string) => fx.as(h.users[i].token).get(`/api/v1/houses/${h.houseId}/chore-debts?scope=${scope}`);
+  describe('GET /houses/:houseId/chore-debts (gom theo cặp người có hướng)', () => {
+    const day = (n: number) => new Date(Date.now() - n * 24 * HOUR);
+    const get = (h: House, i: number, scope = 'all') => fx.as(h.users[i].token).get(`/api/v1/houses/${h.houseId}/chore-debts?scope=${scope}`);
+    const groupOf = (body: any, debtor: string, creditor: string) => body.groups.find((g: any) => g.debtorMemberId === debtor && g.creditorMemberId === creditor);
 
-      for (const i of [0, 1]) {
-        const res = await get(i, 'mine').expect(200);
-        expect(res.body.map((x: any) => x.id)).toEqual([d.id]);
-      }
-      expect((await get(2, 'mine').expect(200)).body).toEqual([]);
-      const all = (await get(2, 'all').expect(200)).body;
-      expect(all.map((x: any) => x.id)).toEqual([d.id]);
-      expect(all[0]).toMatchObject({ debtorName: 'Hùng', creditorName: 'Thiện', weight: 2, status: 'OPEN' });
-      await get(0, 'x').expect(400);
+    it('hai chiều nợ giữa cùng hai người → hai nhóm khác nhau, mỗi nhóm có openWeight đúng, không bù trừ ròng', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+      await oldDebt(h, 0, 1, 2, { createdAt: day(5) }); // Hùng nợ Thiện 2
+      await oldDebt(h, 0, 1, 3, { createdAt: day(4) }); // Hùng nợ Thiện 3
+      await oldDebt(h, 1, 0, 1, { createdAt: day(3) }); // Thiện nợ Hùng 1
+      const res = await get(h, 2).expect(200);
+      expect(res.body.truncated).toBe(false);
+      expect(res.body.groups).toHaveLength(2);
+      const hungThien = groupOf(res.body, member(h, 0), member(h, 1));
+      const thienHung = groupOf(res.body, member(h, 1), member(h, 0));
+      expect(hungThien).toMatchObject({ debtorName: 'Hùng', creditorName: 'Thiện', openWeight: 5 });
+      expect(hungThien.debts).toHaveLength(2);
+      expect(thienHung).toMatchObject({ debtorName: 'Thiện', creditorName: 'Hùng', openWeight: 1 });
+      expect(thienHung.debts).toHaveLength(1);
+      // Mỗi phần tử trong nhóm vẫn là DebtDto nguyên dạng.
+      expect(hungThien.debts[0]).toMatchObject({ weight: 2, status: 'OPEN', phase: 'WAITING_COVER', debtorName: 'Hùng', creditorName: 'Thiện' });
+      expect(Object.keys(hungThien.debts[0]).sort()).toEqual(
+        ['coverAssignment', 'createdAt', 'creditorMemberId', 'creditorName', 'debtorMemberId', 'debtorName', 'id', 'paybackAssignmentId', 'phase', 'pickAttempts', 'pickDeadlineAt', 'pickOpensAt', 'status', 'weight'].sort(),
+      );
     });
 
-    it('chỉ liệt kê nợ OPEN và kèm trạng thái hiển thị', async () => {
+    it('nhóm có cả nợ OPEN và nợ đã đóng trong 30 ngày → một nhóm; nợ đã đóng vẫn hiện nhưng không tính vào openWeight', async () => {
       const h = await fx.houseWith(['Hùng', 'Thiện']);
-      await oldDebt(h, 0, 1, 2, { status: 'PAID', closeReason: 'OFFSET' });
-      await oldDebt(h, 0, 1, 3);
-      const res = await fx.as(h.users[0].token).get(`/api/v1/houses/${h.houseId}/chore-debts?scope=mine`).expect(200);
-      expect(res.body).toHaveLength(1);
-      expect(res.body[0]).toMatchObject({ weight: 3, phase: 'WAITING_COVER' });
+      const open = await oldDebt(h, 0, 1, 2, { createdAt: day(2) });
+      const paid = await oldDebt(h, 0, 1, 3, { createdAt: day(9), status: 'PAID', closeReason: 'OFFSET', settledAt: day(5) });
+      const forgiven = await oldDebt(h, 0, 1, 1, { createdAt: day(8), status: 'FORGIVEN', closeReason: 'FORGIVEN_BY_CREDITOR', settledAt: day(29) });
+      const cancelled = await oldDebt(h, 0, 1, 1, { createdAt: day(7), status: 'CANCELLED', closeReason: 'COVER_MISSED', settledAt: day(1) });
+      const res = await get(h, 0, 'mine').expect(200);
+      expect(res.body.groups).toHaveLength(1);
+      const g = res.body.groups[0];
+      expect(g.openWeight).toBe(2);
+      // Trong nhóm: OPEN trước, rồi theo createdAt tăng dần.
+      expect(g.debts.map((d: any) => d.id)).toEqual([open.id, paid.id, forgiven.id, cancelled.id]);
+      expect(g.debts.map((d: any) => d.status)).toEqual(['OPEN', 'PAID', 'FORGIVEN', 'CANCELLED']);
+    });
+
+    it('nợ đã đóng với settledAt cách đây 31 ngày (hoặc không có settledAt) không hiện; nhóm chỉ còn nợ đã cũ thì biến mất', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+      await oldDebt(h, 0, 1, 2, { status: 'PAID', closeReason: 'OFFSET', settledAt: day(31) });
+      await oldDebt(h, 2, 1, 2, { status: 'CANCELLED', closeReason: 'COVER_MISSED', settledAt: null });
+      const keep = await oldDebt(h, 1, 0, 2, { status: 'PAID', closeReason: 'OFFSET', settledAt: day(29) });
+      const res = await get(h, 0).expect(200);
+      expect(res.body.groups).toHaveLength(1);
+      expect(res.body.groups[0].debts.map((d: any) => d.id)).toEqual([keep.id]);
+      expect(res.body.groups[0].openWeight).toBe(0);
+    });
+
+    it('scope=mine không lộ nhóm mà người xem không phải một trong hai bên; scope=all thấy cả nhà (mọi thành viên)', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+      await oldDebt(h, 0, 1, 2); // Hùng nợ Thiện
+      await oldDebt(h, 1, 2, 1); // Thiện nợ Mai
+      const ids = (body: any) => body.groups.map((g: any) => `${g.debtorName}>${g.creditorName}`).sort();
+      expect(ids((await get(h, 0, 'mine').expect(200)).body)).toEqual(['Hùng>Thiện']);
+      expect(ids((await get(h, 1, 'mine').expect(200)).body)).toEqual(['Hùng>Thiện', 'Thiện>Mai']);
+      expect(ids((await get(h, 2, 'mine').expect(200)).body)).toEqual(['Thiện>Mai']);
+      for (const i of [0, 1, 2]) expect(ids((await get(h, i, 'all').expect(200)).body)).toEqual(['Hùng>Thiện', 'Thiện>Mai']);
+      await get(h, 0, 'x').expect(400);
+    });
+
+    it('thứ tự: nhóm có nợ cũ nhất (createdAt nhỏ nhất) đứng trước; trong nhóm OPEN trước, rồi createdAt, rồi id', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+      // Nhóm Y có khoản mới nhất nhưng cũng có khoản cổ nhất → đứng đầu. Nhóm X chỉ có khoản giữa.
+      const x1 = await oldDebt(h, 0, 1, 1, { createdAt: day(5) });
+      const y1 = await oldDebt(h, 2, 1, 1, { createdAt: day(10), status: 'PAID', closeReason: 'OFFSET', settledAt: day(1) });
+      const y2 = await oldDebt(h, 2, 1, 1, { createdAt: day(1) });
+      const y3 = await oldDebt(h, 2, 1, 1, { createdAt: day(3) });
+      const res = await get(h, 0).expect(200);
+      expect(res.body.groups.map((g: any) => g.debtorName)).toEqual(['Mai', 'Hùng']);
+      expect(res.body.groups[0].debts.map((d: any) => d.id)).toEqual([y3.id, y2.id, y1.id]); // OPEN (cũ → mới) rồi nợ đã đóng
+      expect(res.body.groups[1].debts.map((d: any) => d.id)).toEqual([x1.id]);
+    });
+
+    it('cùng createdAt thì xếp theo id', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const at = day(2);
+      const a = await oldDebt(h, 0, 1, 1, { createdAt: at });
+      const b = await oldDebt(h, 0, 1, 1, { createdAt: at });
+      const res = await get(h, 0).expect(200);
+      expect(res.body.groups[0].debts.map((d: any) => d.id)).toEqual([a.id, b.id].sort((p, q) => p.localeCompare(q)));
+    });
+
+    it('giới hạn 100 nhóm: trả đúng 100 nhóm cũ nhất, truncated = true, không nhóm nào bị cắt dở', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const creditor = member(h, 1);
+      // 105 người nợ khác nhau (id giả, bảng nợ không có khóa ngoại) → 105 nhóm, mỗi nhóm 2 khoản.
+      const data = Array.from({ length: 105 }, (_, i) => {
+        const debtorMemberId = randomUUID();
+        return [0, 1].map((j) => ({
+          houseId: h.houseId,
+          debtorMemberId,
+          creditorMemberId: creditor,
+          swapRequestId: randomUUID(),
+          coverAssignmentId: randomUUID(),
+          weight: 1 + j,
+          createdAt: new Date(Date.now() - (200 - i) * 60_000 + j * 1000),
+        }));
+      }).flat();
+      await fx.prisma.choreDebt.createMany({ data });
+
+      const res = await get(h, 0).expect(200);
+      expect(res.body.truncated).toBe(true);
+      expect(res.body.groups).toHaveLength(100);
+      expect(res.body.groups.every((g: any) => g.debts.length === 2 && g.openWeight === 3)).toBe(true);
+      // 100 nhóm cũ nhất: người nợ thứ 0..99 theo thứ tự tạo.
+      const firstDebtors = data.filter((_, i) => i % 2 === 0).slice(0, 100).map((d) => d.debtorMemberId);
+      expect(res.body.groups.map((g: any) => g.debtorMemberId)).toEqual(firstDebtors);
+    });
+
+    it('đúng 100 nhóm thì không bị đánh dấu truncated', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      await fx.prisma.choreDebt.createMany({
+        data: Array.from({ length: 100 }, (_, i) => ({
+          houseId: h.houseId,
+          debtorMemberId: randomUUID(),
+          creditorMemberId: member(h, 1),
+          swapRequestId: randomUUID(),
+          coverAssignmentId: randomUUID(),
+          weight: 1,
+          createdAt: new Date(Date.now() - (200 - i) * 60_000),
+        })),
+      });
+      const res = await get(h, 0).expect(200);
+      expect(res.body.groups).toHaveLength(100);
+      expect(res.body.truncated).toBe(false);
+    });
+
+    it('nhà không có nợ → groups rỗng, không lỗi', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      expect((await get(h, 0).expect(200)).body).toEqual({ groups: [], truncated: false });
     });
 
     it('người ngoài nhà không đọc được', async () => {
