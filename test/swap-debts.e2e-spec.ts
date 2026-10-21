@@ -277,8 +277,21 @@ describe('Sổ nợ ca (e2e)', () => {
       // Mỗi phần tử trong nhóm vẫn là DebtDto nguyên dạng.
       expect(hungThien.debts[0]).toMatchObject({ weight: 2, status: 'OPEN', phase: 'WAITING_COVER', debtorName: 'Hùng', creditorName: 'Thiện' });
       expect(Object.keys(hungThien.debts[0]).sort()).toEqual(
-        ['coverAssignment', 'createdAt', 'creditorMemberId', 'creditorName', 'debtorMemberId', 'debtorName', 'id', 'paybackAssignmentId', 'phase', 'pickAttempts', 'pickDeadlineAt', 'pickOpensAt', 'status', 'weight'].sort(),
+        ['closeReason', 'coverAssignment', 'createdAt', 'creditorMemberId', 'creditorName', 'debtorMemberId', 'debtorName', 'id', 'paybackAssignmentId', 'phase', 'pickAttempts', 'pickDeadlineAt', 'pickOpensAt', 'settledAt', 'status', 'weight'].sort(),
       );
+    });
+
+    it('B6: DebtDto trả closeReason và settledAt (null với nợ OPEN, có giá trị với nợ đã đóng)', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const settled = day(3);
+      await oldDebt(h, 0, 1, 2, { createdAt: day(5) });
+      await oldDebt(h, 0, 1, 1, { createdAt: day(6), status: 'PAID', closeReason: 'OFFSET', settledAt: settled });
+      await oldDebt(h, 0, 1, 1, { createdAt: day(7), status: 'FORGIVEN', closeReason: 'STALE', settledAt: day(2) });
+      const debts = (await get(h, 0, 'mine').expect(200)).body.groups[0].debts;
+      expect(debts[0]).toMatchObject({ status: 'OPEN', closeReason: null, settledAt: null });
+      // Sau OPEN: theo createdAt tăng dần, nên khoản tạo cũ hơn (FORGIVEN) đứng trước.
+      expect(debts[1]).toMatchObject({ status: 'FORGIVEN', closeReason: 'STALE' });
+      expect(debts[2]).toMatchObject({ status: 'PAID', closeReason: 'OFFSET', settledAt: settled.toISOString() });
     });
 
     it('nhóm có cả nợ OPEN và nợ đã đóng trong 30 ngày → một nhóm; nợ đã đóng vẫn hiện nhưng không tính vào openWeight', async () => {

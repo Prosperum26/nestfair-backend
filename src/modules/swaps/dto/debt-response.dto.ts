@@ -29,6 +29,9 @@ export class DebtDto {
   @ApiProperty() creditorName: string;
   @ApiProperty({ minimum: 1, description: 'Độ nặng còn nợ' }) weight: number;
   @ApiProperty({ enum: DebtStatus, enumName: 'DebtStatus' }) status: DebtStatus;
+  @ApiProperty({ type: String, nullable: true, description: 'Lý do đóng nợ: OFFSET, STALE, FORGIVEN_BY_CREDITOR, COVER_MISSED, ADMIN_REASSIGN, ABSENT_REASSIGN… null khi còn OPEN' })
+  closeReason: string | null;
+  @ApiProperty({ type: Date, nullable: true, description: 'Lúc nợ được đóng; null khi còn OPEN' }) settledAt: Date | null;
   @ApiProperty({ enum: DEBT_PHASES, description: 'Chờ ca gốc xong / chờ lịch tuần sau / đang trong cửa sổ chọn bù / đã chọn ca bù' }) phase: DebtPhase;
   @ApiProperty({ type: DebtCoverDto, nullable: true }) coverAssignment: DebtCoverDto | null;
   @ApiProperty({ type: Date, nullable: true }) pickOpensAt: Date | null;

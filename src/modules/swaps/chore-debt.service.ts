@@ -371,6 +371,8 @@ export class ChoreDebtService {
         creditorName: nameOf.get(d.creditorMemberId) ?? '',
         weight: d.weight,
         status: d.status,
+        closeReason: d.closeReason,
+        settledAt: d.settledAt,
         phase,
         coverAssignment: cover ? { id: cover.id, choreTitle: cover.titleSnapshot, occurrenceDate: dsOf(cover.occurrenceDate), status: cover.status } : null,
         pickOpensAt: d.pickOpensAt,
