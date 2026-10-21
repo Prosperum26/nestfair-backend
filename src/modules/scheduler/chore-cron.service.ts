@@ -127,7 +127,7 @@ export class ChoreCronService implements OnApplicationBootstrap {
             ${this.scope(houseIds)}
           FOR UPDATE OF a SKIP LOCKED
         )
-        UPDATE chore_assignments c SET status = 'MISSED', "updatedAt" = (now() AT TIME ZONE 'UTC')
+        UPDATE chore_assignments c SET status = 'MISSED', version = c.version + 1, "updatedAt" = (now() AT TIME ZONE 'UTC')
         FROM due WHERE c.id = due.id
         RETURNING c.id, c."houseId", c."assigneeId"`);
       if (touched.length === 0) return touched;
@@ -218,7 +218,7 @@ export class ChoreCronService implements OnApplicationBootstrap {
           FOR UPDATE OF a SKIP LOCKED
         )
         UPDATE chore_assignments c
-        SET status = 'DONE', "verifyMode" = 'AUTO_APPROVED', "verifiedAt" = ${at}::timestamp, "updatedAt" = (now() AT TIME ZONE 'UTC')
+        SET status = 'DONE', version = c.version + 1, "verifyMode" = 'AUTO_APPROVED', "verifiedAt" = ${at}::timestamp, "updatedAt" = (now() AT TIME ZONE 'UTC')
         FROM due WHERE c.id = due.id
         RETURNING c.id, c."houseId", c."assigneeId", c."weekKey"`);
       const perHouse = new Map<string, number>();

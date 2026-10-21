@@ -92,6 +92,7 @@ export class CheckinService {
         const res = await tx.choreAssignment.updateMany({
           where: { id: assignment.id, status: { in: ['TODO', 'REJECTED'] }, disputed: false },
           data: {
+            version: { increment: 1 },
             status,
             proofImageUrl: uploaded.url,
             proofHash,

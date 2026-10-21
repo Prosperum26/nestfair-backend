@@ -339,7 +339,7 @@ export class WheelService implements OnApplicationBootstrap, OnModuleDestroy {
       if (current.status === 'VOIDED' || a.status !== 'TODO' || a.submittedAt) {
         throw coded(HttpStatus.CONFLICT, 'ASSIGNMENT_STATE_CHANGED', 'Ca này đã được nộp, đổi trạng thái hoặc đã hủy rồi.');
       }
-      await tx.choreAssignment.update({ where: { id: found.assignmentId }, data: { status: 'CANCELLED' } });
+      await tx.choreAssignment.update({ where: { id: found.assignmentId }, data: { status: 'CANCELLED', version: { increment: 1 } } });
       const updated = await tx.luckyWheelLog.update({ where: { id: spinId }, data: { status: 'VOIDED', voidedById: userId, voidReason: reason } });
       await this.audit.log(found.houseId, membership.id, 'WHEEL_VOID', { spinId, taskTitle: found.taskTitle, reason }, { assignmentId: found.assignmentId }, tx);
       // Không kèm lý do lên ticker.

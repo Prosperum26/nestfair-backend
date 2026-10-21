@@ -296,7 +296,7 @@ export class ScheduleService {
           ? { assigneeId: pick, source: o.source === 'WHEEL' ? ('WHEEL' as const) : ('REASSIGN' as const) }
           : { assigneeId: null, status: 'UNASSIGNED' as const };
         const count = await this.prisma.$transaction(async (tx) => {
-          const res = await tx.choreAssignment.updateMany({ where: { id: o.id, status: 'TODO', assigneeId: o.assigneeId }, data });
+          const res = await tx.choreAssignment.updateMany({ where: { id: o.id, status: 'TODO', assigneeId: o.assigneeId }, data: { ...data, version: { increment: 1 } } });
           // Ca được làm hộ bị dời vì người làm hộ vắng: nợ ca không còn lý do tồn tại (D9).
           if (res.count > 0 && kind === 'ABSENCE') await this.debts.cancelForMovedCover(tx, o.id);
           return res.count;

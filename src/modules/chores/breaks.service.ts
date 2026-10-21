@@ -49,7 +49,7 @@ export class BreaksService {
       };
       const ids = (await tx.choreAssignment.findMany({ where, select: { id: true } })).map((r) => r.id);
       if (ids.length > 0) {
-        await tx.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED' } });
+        await tx.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED', version: { increment: 1 } } });
         outbox.toHouse(houseId, 'chore:cancelled', { breakId: created.id, assignmentIds: ids }, actor);
       }
       await this.audit.log(
