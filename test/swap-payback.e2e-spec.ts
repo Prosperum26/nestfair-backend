@@ -80,6 +80,30 @@ describe('Chọn ca bù, tha nợ và auto-pick (e2e)', () => {
     expect((await debtRow(s.debtId)).settledAt).not.toBeNull();
   });
 
+  it('B9: payback idempotent theo Idempotency-Key và theo ca đã chọn, kể cả khi nợ đã PAID', async () => {
+    const s = await scenario(3);
+    const chosen = await s.slot(2, 3);
+    const other = await s.slot(3, 3);
+    const key = randomUUID();
+    expect((await pick(s.h, CREDITOR, s.debtId, chosen.id, key).expect(200)).body).toMatchObject({ alreadyDone: false, paybackAssignmentId: chosen.id });
+
+    // Cùng key (kể cả body khác): trả lại kết quả cũ, không đổi gì.
+    expect((await pick(s.h, CREDITOR, s.debtId, chosen.id, key).expect(200)).body).toMatchObject({ alreadyDone: true, paybackAssignmentId: chosen.id });
+    expect((await pick(s.h, CREDITOR, s.debtId, other.id, key).expect(200)).body).toMatchObject({ alreadyDone: true, paybackAssignmentId: chosen.id });
+    expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: other.id } })).assigneeId).toBe(member(s.h, CREDITOR));
+
+    // Làm xong, nợ PAID.
+    await fx.prisma.choreAssignment.update({ where: { id: chosen.id }, data: { status: 'PENDING_VERIFY', submittedAt: new Date() } });
+    await fx.as(s.h.users[0].token).patch(`/api/v1/assignments/${chosen.id}/verify`, { decision: 'APPROVED' }).expect(200);
+    expect((await debtRow(s.debtId)).status).toBe('PAID');
+
+    // Sau khi PAID: cùng key hoặc cùng ca đã chọn vẫn là 200 với kết quả cũ; ca khác với key mới thì 409.
+    expect((await pick(s.h, CREDITOR, s.debtId, chosen.id, key).expect(200)).body).toMatchObject({ alreadyDone: true, paybackAssignmentId: chosen.id });
+    expect((await pick(s.h, CREDITOR, s.debtId, chosen.id).expect(200)).body).toMatchObject({ alreadyDone: true, paybackAssignmentId: chosen.id });
+    expect((await pick(s.h, CREDITOR, s.debtId, other.id, key).expect(200)).body.paybackAssignmentId).toBe(chosen.id);
+    expect((await pick(s.h, CREDITOR, s.debtId, other.id).expect(409)).body.code).toBe('DEBT_NOT_OPEN');
+  });
+
   it('payback-options: ca hợp lệ kèm chênh độ nặng; ca quá gần hạn bị PAYBACK_TOO_SOON với câu tiếng Việt', async () => {
     const s = await scenario(3);
     const ok = await s.slot(2, 2);

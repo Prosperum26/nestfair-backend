@@ -160,15 +160,26 @@ export class PaybackService {
     outbox.toHouse(debt.houseId, 'chore:reassigned', { assignmentId: slot.id, weekKey: slot.weekKey, assignmentIds: [slot.id] });
   }
 
-  async payback(userId: string, debtId: string, assignmentId: string, _idemKey: string, now: Date = new Date()): Promise<PaybackResultDto> {
+  async payback(userId: string, debtId: string, assignmentId: string, idemKey: string, now: Date = new Date()): Promise<PaybackResultDto> {
     const { debt: seen, m } = await this.access(userId, debtId);
     if (seen.creditorMemberId !== m.id) throw fail('NOT_CREDITOR');
     const outbox = this.events.outbox();
     const out = await this.prisma.$transaction(async (tx) => {
       await this.houseLock(tx, seen.houseId);
       const debt = await this.lockDebt(tx, debtId);
+      // Idempotent: cùng key (đã chọn thành công trước đó) hoặc cùng ca đã chọn → trả kết quả cũ, kể cả khi nợ đã PAID.
+      if (debt.paybackAssignmentId) {
+        const prior = await tx.choreAuditLog.findFirst({
+          where: {
+            houseId: debt.houseId,
+            action: 'PAYBACK_PICK',
+            AND: [{ detail: { path: ['debtId'], equals: debt.id } }, { detail: { path: ['idemKey'], equals: idemKey } }],
+          },
+          select: { id: true },
+        });
+        if (prior || debt.paybackAssignmentId === assignmentId) return { alreadyDone: true, debt };
+      }
       if (debt.status !== 'OPEN') throw fail('DEBT_NOT_OPEN');
-      if (debt.paybackAssignmentId === assignmentId) return { alreadyDone: true, debt };
       if (debt.paybackAssignmentId) throw fail('PAYBACK_ALREADY_CHOSEN');
       if (!debt.pickOpensAt || !debt.pickDeadlineAt || debt.pickOpensAt.getTime() > now.getTime()) throw fail('PAYBACK_WINDOW_NOT_OPEN');
 
@@ -181,6 +192,7 @@ export class PaybackService {
       const reason = paybackReason(toPickSlot(slot), debt.pickDeadlineAt, c.state(c.weeksFor(debt.pickDeadlineAt)));
       if (reason) throw fail(reason, { Tên: 'Người nhận', Việc: slot.titleSnapshot });
       await this.assign(tx, outbox, debt, slot);
+      await this.audit.log(debt.houseId, m.id, 'PAYBACK_PICK', { debtId: debt.id, assignmentId: slot.id, idemKey }, { assignmentId: slot.id }, tx);
       return { alreadyDone: false, debt: await tx.choreDebt.findUniqueOrThrow({ where: { id: debt.id } }) };
     }, TX);
     outbox.flush();
