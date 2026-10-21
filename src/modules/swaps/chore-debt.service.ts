@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../chores/audit.service.js';
 import { dateOf, type Db, dsOf } from '../chores/schedule-context.js';
 import { addDays } from '../chores/week.js';
-import type { Outbox } from '../events/events.service.js';
+import { EventsService, type Outbox } from '../events/events.service.js';
 import type { DebtDto, DebtPhase } from './dto/debt-response.dto.js';
 
 const HOUR = 3_600_000;
@@ -12,6 +12,8 @@ const HOUR = 3_600_000;
 export const PICK_WINDOW_HOURS = 48;
 /** Sau bấy nhiêu lần ca bù bị bỏ lỡ thì chuyển cho Admin. */
 export const MAX_PICK_ATTEMPTS = 3;
+/** Nợ chưa xếp được ca bù sau bấy nhiêu ngày thì tha (4 tuần). */
+export const STALE_DAYS = 28;
 
 interface Viewer {
   id: string;
@@ -23,6 +25,7 @@ export class ChoreDebtService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly events: EventsService,
   ) {}
 
   /**
@@ -138,6 +141,46 @@ export class ChoreDebtService {
       await tx.choreDebt.update({ where: { id: d.id }, data: { status: 'CANCELLED', closeReason: 'COVER_MISSED', settledAt: now } });
       outbox.toHouse(d.houseId, 'chore_debt:forgiven', { debtId: d.id, closeReason: 'COVER_MISSED' });
     }
+  }
+
+  /**
+   * Ca được làm hộ bị dời cho người khác vì người làm hộ khai vắng (S-20): ca đã có người khác làm nên nợ bị hủy (D9).
+   * Gọi trong cùng transaction với việc dời ca.
+   */
+  async cancelForMovedCover(tx: Db, assignmentId: string, now: Date = new Date()): Promise<number> {
+    const { count } = await tx.choreDebt.updateMany({
+      where: { coverAssignmentId: assignmentId, status: 'OPEN' },
+      data: { status: 'CANCELLED', closeReason: 'ABSENT_REASSIGN', settledAt: now },
+    });
+    return count;
+  }
+
+  /**
+   * Nợ OPEN quá 4 tuần mà chưa xếp được ca bù thì tha (STALE). Nợ đã có ca bù và nợ đã giao Admin (chọn hỏng 3 lần)
+   * không bị tự tha. Idempotent. Trả số nợ vừa đóng.
+   */
+  async settleStale(now: Date = new Date(), houseIds?: string[]): Promise<number> {
+    const cutoff = new Date(now.getTime() - STALE_DAYS * 24 * HOUR);
+    const outbox = this.events.outbox();
+    const closed = await this.prisma.$transaction(async (tx) => {
+      const stale = await tx.choreDebt.findMany({
+        where: {
+          status: 'OPEN',
+          paybackAssignmentId: null,
+          pickAttempts: { lt: MAX_PICK_ATTEMPTS },
+          createdAt: { lt: cutoff },
+          ...(houseIds ? { houseId: { in: houseIds } } : {}),
+        },
+        select: { id: true, houseId: true },
+      });
+      for (const d of stale) {
+        const { count } = await tx.choreDebt.updateMany({ where: { id: d.id, status: 'OPEN' }, data: { status: 'FORGIVEN', closeReason: 'STALE', settledAt: now } });
+        if (count) outbox.toHouse(d.houseId, 'chore_debt:forgiven', { debtId: d.id, closeReason: 'STALE' });
+      }
+      return stale.length;
+    });
+    outbox.flush();
+    return closed;
   }
 
   /** Lịch tuần `weekStart` vừa được sinh: mở cửa sổ cho các nợ có ca gốc DONE ở tuần liền trước mà đang chờ lịch. */

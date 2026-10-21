@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import type { Env } from '../../config/env.validation.js';
+import { PrismaService } from '../../prisma/prisma.service.js';
+import { ChoreDebtService } from '../swaps/chore-debt.service.js';
 import { SwapEscalationService } from '../swaps/swap-escalation.service.js';
 
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
@@ -16,6 +18,8 @@ export class SwapCronService {
 
   constructor(
     private readonly escalation: SwapEscalationService,
+    private readonly debts: ChoreDebtService,
+    private readonly prisma: PrismaService,
     private readonly config: ConfigService<Env, true>,
   ) {}
 
@@ -40,5 +44,25 @@ export class SwapCronService {
   @Cron('* * * * *', { timeZone: TIME_ZONE })
   cronExpireSwaps() {
     return this.guarded('expireSwaps', () => this.expireSwaps());
+  }
+
+  /** Hằng ngày: xóa `swap_locks` không còn yêu cầu PENDING tương ứng. Trả số khóa đã xóa. */
+  async repairLocks(): Promise<number> {
+    return this.prisma.$executeRaw`
+      DELETE FROM swap_locks l
+      WHERE NOT EXISTS (SELECT 1 FROM chore_swap_requests s WHERE s.id = l."swapRequestId" AND s.status = 'PENDING')`;
+  }
+
+  /** Hằng ngày: nợ OPEN quá 4 tuần không xếp được → FORGIVEN (STALE). */
+  settleStaleDebts(now: Date = new Date(), houseIds?: string[]): Promise<number> {
+    return this.debts.settleStale(now, houseIds);
+  }
+
+  @Cron('0 3 * * *', { timeZone: TIME_ZONE })
+  cronDaily() {
+    return this.guarded('swapDaily', async () => {
+      await this.repairLocks();
+      await this.settleStaleDebts();
+    });
   }
 }
