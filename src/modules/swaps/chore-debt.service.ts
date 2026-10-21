@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { ChoreDebt, ChoreSwapRequest } from '../../generated/prisma/client.js';
+import type { ChoreAssignment, ChoreDebt, ChoreSwapRequest } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../chores/audit.service.js';
 import { dateOf, type Db, dsOf } from '../chores/schedule-context.js';
@@ -14,6 +14,17 @@ export const PICK_WINDOW_HOURS = 48;
 export const MAX_PICK_ATTEMPTS = 3;
 /** Nợ chưa xếp được ca bù sau bấy nhiêu ngày thì tha (4 tuần). */
 export const STALE_DAYS = 28;
+
+/** Ca gắn lại khi xáo lịch (xem `pinsForReroll`). */
+export interface RerollPin {
+  debtId: string;
+  kind: 'PAYBACK' | 'COVER';
+  choreId: string;
+  date: string;
+  memberId: string;
+  originalMemberId: string;
+  swapRequestId: string;
+}
 
 interface Viewer {
   id: string;
@@ -93,11 +104,16 @@ export class ChoreDebtService {
 
   /** Ca `assignmentId` vừa DONE: nếu là ca gốc của một nợ OPEN thì mở cửa sổ chọn bù (khi lịch tuần kế đã có). */
   async onAssignmentDone(tx: Db, outbox: Outbox, assignmentId: string, now: Date): Promise<void> {
-    // Ca bù hoàn thành → nợ được trả.
+    // Ca bù hoàn thành → nợ được trả, nhưng chỉ khi người làm xong đúng là người nợ. Nếu Admin đã giao ca bù cho
+    // người khác thì việc họ làm xong không trả nợ của người nợ.
     const paid = await tx.choreDebt.findMany({ where: { paybackAssignmentId: assignmentId, status: 'OPEN' } });
-    for (const d of paid) {
-      await tx.choreDebt.update({ where: { id: d.id }, data: { status: 'PAID', settledAt: now } });
-      outbox.toHouse(d.houseId, 'chore_debt:paid', { debtId: d.id });
+    if (paid.length) {
+      const slot = await tx.choreAssignment.findUnique({ where: { id: assignmentId }, select: { assigneeId: true } });
+      for (const d of paid) {
+        if (slot?.assigneeId !== d.debtorMemberId) continue;
+        await tx.choreDebt.update({ where: { id: d.id }, data: { status: 'PAID', settledAt: now } });
+        outbox.toHouse(d.houseId, 'chore_debt:paid', { debtId: d.id });
+      }
     }
     const debts = await tx.choreDebt.findMany({ where: { coverAssignmentId: assignmentId, status: 'OPEN', pickOpensAt: null } });
     if (!debts.length) return;
@@ -140,6 +156,77 @@ export class ChoreDebtService {
     for (const d of covered) {
       await tx.choreDebt.update({ where: { id: d.id }, data: { status: 'CANCELLED', closeReason: 'COVER_MISSED', settledAt: now } });
       outbox.toHouse(d.houseId, 'chore_debt:forgiven', { debtId: d.id, closeReason: 'COVER_MISSED' });
+    }
+  }
+
+  /**
+   * Ca bù đã chọn không còn là ca của người nợ (Admin CANCEL, hoặc hệ thống dời vì khai vắng): bỏ lựa chọn, mở lại
+   * cửa sổ 48 giờ để người được làm bù chọn ca khác. `pickAttempts` không đổi (đây không phải lỗi của người nợ).
+   */
+  async releasePayback(tx: Db, outbox: Outbox, assignmentId: string, now: Date): Promise<number> {
+    const debts = await tx.choreDebt.findMany({ where: { status: 'OPEN', paybackAssignmentId: assignmentId } });
+    for (const d of debts) {
+      const cleared = await tx.choreDebt.update({ where: { id: d.id }, data: { paybackAssignmentId: null } });
+      await this.openPickWindow(tx, outbox, cleared, now, now);
+    }
+    return debts.length;
+  }
+
+  /** Ca gốc được làm hộ bị Admin hủy (COVER_MISSED) hoặc giao lại (ADMIN_REASSIGN): nợ không còn lý do tồn tại. */
+  async cancelForCover(tx: Db, outbox: Outbox, assignmentId: string, now: Date, reason: 'COVER_MISSED' | 'ADMIN_REASSIGN'): Promise<number> {
+    const debts = await tx.choreDebt.findMany({ where: { status: 'OPEN', coverAssignmentId: assignmentId } });
+    for (const d of debts) {
+      await tx.choreDebt.update({ where: { id: d.id }, data: { status: 'CANCELLED', closeReason: reason, settledAt: now } });
+      outbox.toHouse(d.houseId, 'chore_debt:forgiven', { debtId: d.id, closeReason: reason });
+    }
+    return debts.length;
+  }
+
+  /**
+   * Xáo lại lịch (D18): ca bù đã chọn (do người nợ giữ) và ca được làm hộ của nợ OPEN phải được ghim lại ở lịch mới.
+   * Gọi trước khi xóa lịch cũ; trả danh sách ghim để đưa vào thuật toán rồi `applyRerollPins` sau khi lưu lịch mới.
+   */
+  async pinsForReroll(tx: Db, houseId: string, current: ChoreAssignment[]): Promise<RerollPin[]> {
+    const byId = new Map(current.map((a) => [a.id, a]));
+    const debts = await tx.choreDebt.findMany({
+      where: { houseId, status: 'OPEN', OR: [{ paybackAssignmentId: { in: [...byId.keys()] } }, { coverAssignmentId: { in: [...byId.keys()] } }] },
+    });
+    const pins: RerollPin[] = [];
+    for (const d of debts) {
+      const payback = d.paybackAssignmentId ? byId.get(d.paybackAssignmentId) : undefined;
+      if (payback && payback.assigneeId === d.debtorMemberId) {
+        pins.push({ debtId: d.id, kind: 'PAYBACK', choreId: payback.choreId, date: dsOf(payback.occurrenceDate), memberId: d.debtorMemberId, originalMemberId: d.creditorMemberId, swapRequestId: d.swapRequestId });
+      }
+      const cover = byId.get(d.coverAssignmentId);
+      if (cover?.assigneeId) {
+        pins.push({ debtId: d.id, kind: 'COVER', choreId: cover.choreId, date: dsOf(cover.occurrenceDate), memberId: cover.assigneeId, originalMemberId: d.debtorMemberId, swapRequestId: d.swapRequestId });
+      }
+    }
+    return pins;
+  }
+
+  /**
+   * Sau khi lịch mới đã lưu: gắn lại nợ vào ca mới tương ứng (cùng việc, cùng ngày). Không giữ được ca (người đó vắng,
+   * việc đã tắt…): ca bù thì mở lại để chọn, ca được làm hộ thì hủy nợ.
+   */
+  async applyRerollPins(tx: Db, outbox: Outbox, scheduleId: string, pins: RerollPin[], now: Date): Promise<void> {
+    for (const pin of pins) {
+      const row = await tx.choreAssignment.findFirst({ where: { scheduleId, choreId: pin.choreId, occurrenceDate: dateOf(pin.date), slotIndex: 0 } });
+      if (row && row.assigneeId === pin.memberId) {
+        await tx.choreAssignment.update({
+          where: { id: row.id },
+          data: { source: pin.kind, originalAssigneeId: pin.originalMemberId, swapRequestId: pin.swapRequestId },
+        });
+        await tx.choreDebt.update({ where: { id: pin.debtId }, data: pin.kind === 'PAYBACK' ? { paybackAssignmentId: row.id } : { coverAssignmentId: row.id } });
+        continue;
+      }
+      if (pin.kind === 'PAYBACK') {
+        const cleared = await tx.choreDebt.update({ where: { id: pin.debtId }, data: { paybackAssignmentId: null } });
+        await this.openPickWindow(tx, outbox, cleared, now, now);
+      } else {
+        const closed = await tx.choreDebt.update({ where: { id: pin.debtId }, data: { status: 'CANCELLED', closeReason: 'ABSENT_REASSIGN', settledAt: now } });
+        outbox.toHouse(closed.houseId, 'chore_debt:forgiven', { debtId: closed.id, closeReason: 'ABSENT_REASSIGN' });
+      }
     }
   }
 

@@ -197,6 +197,13 @@ export class VerifyService {
       if (count === 0) throw this.stateChanged('Ca này vừa được người khác xử lý.');
       const to = await tx.choreAssignment.findUniqueOrThrow({ where: { id: assignment.id }, select: { status: true } });
       if (dto.action === 'FORCE_DONE') await this.debts.onAssignmentDone(tx, outbox, assignment.id, now);
+      if (dto.action === 'CANCEL') {
+        // Ca bù bị hủy: người được làm bù chọn lại. Ca gốc được làm hộ bị hủy: nợ không còn lý do tồn tại.
+        await this.debts.releasePayback(tx, outbox, assignment.id, now);
+        await this.debts.cancelForCover(tx, outbox, assignment.id, now, 'COVER_MISSED');
+      }
+      // REASSIGN ca bù: nợ vẫn trỏ ca đó (người mới làm xong không trả nợ, xem onAssignmentDone). REASSIGN ca gốc: hủy nợ.
+      if (dto.action === 'REASSIGN') await this.debts.cancelForCover(tx, outbox, assignment.id, now, 'ADMIN_REASSIGN');
       await this.audit.log(
         assignment.houseId,
         membership.id,

@@ -143,7 +143,8 @@ export class ScheduleService {
     onRerolled?: OnScheduleChanged,
   ): Promise<{ changed: boolean; schedule: WeekSchedule; message?: string }> {
     if (actor.role !== 'ADMIN') throw coded(HttpStatus.FORBIDDEN, 'ADMIN_ONLY', 'Chỉ trưởng phòng mới xáo lại được lịch.');
-    return this.withHouseLock(houseId, async (tx) => {
+    const outbox = this.events.outbox();
+    const out = await this.withHouseLock(houseId, async (tx) => {
       const sched = await tx.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } });
       if (!sched || sched.status === 'EMPTY') throw coded(HttpStatus.NOT_FOUND, 'SCHEDULE_NOT_FOUND', 'Tuần này chưa có lịch để xáo lại.');
       if (weekStart <= toDateStr(now)) throw coded(HttpStatus.CONFLICT, 'SCHEDULE_LOCKED', 'Tuần này đã bắt đầu nên lịch đã khóa.');
@@ -169,10 +170,13 @@ export class ScheduleService {
       const currentSig = signature(current.map((a) => ({ choreId: a.choreId, day: dsOf(a.occurrenceDate), who: a.assigneeId })));
 
       const ctx = await buildGenContext(tx, houseId, weekStart, 0);
+      // D18: ca bù đã chọn và ca được làm hộ của nợ OPEN được ghim lại ở lịch mới.
+      const pins = await this.debts.pinsForReroll(tx, houseId, current);
+      const pinned = pins.map((p) => ({ choreId: p.choreId, date: p.date, memberId: p.memberId, source: p.kind }));
       let accepted: { seed: number; res: GenResult } | null = null;
       for (let i = 0; i < REROLL_TRIES && !accepted; i++) {
         const seed = randomSeed();
-        const res = generateWeek({ ...ctx.input, seed });
+        const res = generateWeek({ ...ctx.input, seed, pinned });
         const sig = signature(res.slots.map((s) => ({ choreId: s.choreId, day: s.occurrenceDate, who: s.memberId })));
         if (res.status !== 'EMPTY' && sig !== currentSig) accepted = { seed, res };
       }
@@ -188,10 +192,13 @@ export class ScheduleService {
         },
       });
       await storeSlots(tx, houseId, updated, ctx, accepted.res.slots);
+      await this.debts.applyRerollPins(tx, outbox, updated.id, pins, now);
       await this.audit.log(houseId, actor.memberId, 'REROLL', { weekKey: updated.weekKey, oldSeed: sched.seed, newSeed: accepted.seed }, { scheduleId: sched.id }, tx);
       await onRerolled?.(tx, updated);
       return { changed: true, schedule: updated };
     });
+    outbox.flush();
+    return out;
   }
 
   /**
@@ -265,6 +272,7 @@ export class ScheduleService {
     let moved = 0;
     let unassigned = 0;
     const touched: string[] = [];
+    const debtOutbox = this.events.outbox();
     const byWeek = new Map<DateStr, typeof slots>();
     for (const o of slots) byWeek.set(dsOf(o.weekStart), [...(byWeek.get(dsOf(o.weekStart)) ?? []), o]);
 
@@ -299,6 +307,8 @@ export class ScheduleService {
           const res = await tx.choreAssignment.updateMany({ where: { id: o.id, status: 'TODO', assigneeId: o.assigneeId }, data: { ...data, version: { increment: 1 } } });
           // Ca được làm hộ bị dời vì người làm hộ vắng: nợ ca không còn lý do tồn tại (D9).
           if (res.count > 0 && kind === 'ABSENCE') await this.debts.cancelForMovedCover(tx, o.id);
+          // Ca bù của người nợ bị dời đi: mở lại cho người được làm bù chọn ca khác (không để nợ trỏ vào ca của người khác).
+          if (res.count > 0) await this.debts.releasePayback(tx, debtOutbox, o.id, new Date());
           return res.count;
         });
         if (count === 0) continue;
@@ -311,6 +321,7 @@ export class ScheduleService {
         await this.audit.log(houseId, null, `${kind}_${pick ? 'REASSIGN' : 'UNASSIGNED'}`, { from: o.assigneeId, to: pick ?? null }, { assignmentId: o.id });
       }
     }
+    debtOutbox.flush();
     if (touched.length > 0) this.events.outbox().toHouse(houseId, 'chore:reassigned', { assignmentIds: touched }).flush();
     return { moved, unassigned };
   }
