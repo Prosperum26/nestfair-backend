@@ -33,6 +33,8 @@ const PENDING_LIMIT = 3;
 const DAILY_LIMIT = 10;
 const COOLDOWN_REJECTIONS = 2;
 const COOLDOWN_MS = 24 * HOUR;
+/** Vi phạm chỉ nói về người nhận, không phải về ca (dùng cho Chợ ca). */
+const ACCEPTOR_ONLY = new Set(['TARGET_ABSENT', 'TARGET_LEFT', 'DUPLICATE_CHORE_SAME_DAY', 'SWAP_SELF']);
 
 export interface Actor {
   id: string;
@@ -269,6 +271,11 @@ export class SwapsService {
             now,
             phase: 'accept',
           });
+      // Chợ ca: vi phạm chỉ liên quan tới người bấm nhận (vắng, đã có ca cùng việc) thì từ chối riêng người đó,
+      // không đóng yêu cầu của người khác. Vi phạm về chính ca thì đóng như mọi yêu cầu khác.
+      if (swap.targetMemberId === null && violations.length && violations.every((v) => ACCEPTOR_ONLY.has(v.code))) {
+        return { kind: 'REJECT', rejection: fromViolation(violations[0]) };
+      }
       if (violations.length) problem = new SwapRejection(409, 'SLOT_CHANGED', violations[0].message, { reasonCode: violations[0].code });
     }
     if (problem) {
