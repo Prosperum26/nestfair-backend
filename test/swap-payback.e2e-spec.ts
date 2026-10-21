@@ -87,9 +87,11 @@ describe('Chọn ca bù, tha nợ và auto-pick (e2e)', () => {
     const key = randomUUID();
     expect((await pick(s.h, CREDITOR, s.debtId, chosen.id, key).expect(200)).body).toMatchObject({ alreadyDone: false, paybackAssignmentId: chosen.id });
 
-    // Cùng key (kể cả body khác): trả lại kết quả cũ, không đổi gì.
+    // Cùng key và cùng ca: trả lại kết quả cũ, không đổi gì.
     expect((await pick(s.h, CREDITOR, s.debtId, chosen.id, key).expect(200)).body).toMatchObject({ alreadyDone: true, paybackAssignmentId: chosen.id });
-    expect((await pick(s.h, CREDITOR, s.debtId, other.id, key).expect(200)).body).toMatchObject({ alreadyDone: true, paybackAssignmentId: chosen.id });
+    // Cùng key nhưng khác ca: dùng lại key sai mục đích → 422, không đổi gì.
+    const reused = await pick(s.h, CREDITOR, s.debtId, other.id, key).expect(422);
+    expect(reused.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
     expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: other.id } })).assigneeId).toBe(member(s.h, CREDITOR));
 
     // Làm xong, nợ PAID.
@@ -97,10 +99,10 @@ describe('Chọn ca bù, tha nợ và auto-pick (e2e)', () => {
     await fx.as(s.h.users[0].token).patch(`/api/v1/assignments/${chosen.id}/verify`, { decision: 'APPROVED' }).expect(200);
     expect((await debtRow(s.debtId)).status).toBe('PAID');
 
-    // Sau khi PAID: cùng key hoặc cùng ca đã chọn vẫn là 200 với kết quả cũ; ca khác với key mới thì 409.
+    // Sau khi PAID: cùng key + cùng ca hoặc cùng ca đã chọn vẫn là 200 với kết quả cũ; cùng key khác ca là 422; ca khác với key mới là 409.
     expect((await pick(s.h, CREDITOR, s.debtId, chosen.id, key).expect(200)).body).toMatchObject({ alreadyDone: true, paybackAssignmentId: chosen.id });
     expect((await pick(s.h, CREDITOR, s.debtId, chosen.id).expect(200)).body).toMatchObject({ alreadyDone: true, paybackAssignmentId: chosen.id });
-    expect((await pick(s.h, CREDITOR, s.debtId, other.id, key).expect(200)).body.paybackAssignmentId).toBe(chosen.id);
+    expect((await pick(s.h, CREDITOR, s.debtId, other.id, key).expect(422)).body.code).toBe('IDEMPOTENCY_KEY_REUSED');
     expect((await pick(s.h, CREDITOR, s.debtId, other.id).expect(409)).body.code).toBe('DEBT_NOT_OPEN');
   });
 

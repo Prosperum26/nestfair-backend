@@ -8,6 +8,7 @@ export interface SwapErrorSpec {
  * Chỗ `{Tên}`, `{Việc}`, `{dd.mm}` được thay bằng `fillMessage`.
  */
 export const SWAP_ERRORS: Record<string, SwapErrorSpec> = {
+  IDEMPOTENCY_KEY_REUSED: { status: 422, message: 'Mã chống gửi trùng này đã dùng cho một lựa chọn khác. Hãy thử lại.' },
   IDEMPOTENCY_KEY_REQUIRED: { status: 400, message: 'Thiếu mã chống gửi trùng. Hãy thử lại.' },
 
   SLOT_LOCKED: { status: 409, message: 'Ca này đang chờ người khác trả lời.' },

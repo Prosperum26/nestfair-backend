@@ -167,18 +167,23 @@ export class PaybackService {
     const out = await this.prisma.$transaction(async (tx) => {
       await this.houseLock(tx, seen.houseId);
       const debt = await this.lockDebt(tx, debtId);
-      // Idempotent: cùng key (đã chọn thành công trước đó) hoặc cùng ca đã chọn → trả kết quả cũ, kể cả khi nợ đã PAID.
-      if (debt.paybackAssignmentId) {
-        const prior = await tx.choreAuditLog.findFirst({
-          where: {
-            houseId: debt.houseId,
-            action: 'PAYBACK_PICK',
-            AND: [{ detail: { path: ['debtId'], equals: debt.id } }, { detail: { path: ['idemKey'], equals: idemKey } }],
-          },
-          select: { id: true },
-        });
-        if (prior || debt.paybackAssignmentId === assignmentId) return { alreadyDone: true, debt };
+      // Idempotent theo key: cùng key đã chọn thành công trước đó cho nợ này → trả kết quả cũ nếu cùng ca, 422 nếu khác ca
+      // (dùng lại key cho một lựa chọn khác). Kể cả khi nợ đã PAID.
+      const prior = await tx.choreAuditLog.findFirst({
+        where: {
+          houseId: debt.houseId,
+          action: 'PAYBACK_PICK',
+          AND: [{ detail: { path: ['debtId'], equals: debt.id } }, { detail: { path: ['idemKey'], equals: idemKey } }],
+        },
+        select: { detail: true },
+      });
+      if (prior) {
+        const first = (prior.detail as { assignmentId?: string }).assignmentId;
+        if (first !== assignmentId) throw fail('IDEMPOTENCY_KEY_REUSED');
+        return { alreadyDone: true, debt, paybackAssignmentId: first };
       }
+      // Cùng ca đã chọn (key khác): cũng là kết quả cũ.
+      if (debt.paybackAssignmentId === assignmentId) return { alreadyDone: true, debt, paybackAssignmentId: assignmentId };
       if (debt.status !== 'OPEN') throw fail('DEBT_NOT_OPEN');
       if (debt.paybackAssignmentId) throw fail('PAYBACK_ALREADY_CHOSEN');
       if (!debt.pickOpensAt || !debt.pickDeadlineAt || debt.pickOpensAt.getTime() > now.getTime()) throw fail('PAYBACK_WINDOW_NOT_OPEN');
@@ -193,10 +198,10 @@ export class PaybackService {
       if (reason) throw fail(reason, { Tên: 'Người nhận', Việc: slot.titleSnapshot });
       await this.assign(tx, outbox, debt, slot);
       await this.audit.log(debt.houseId, m.id, 'PAYBACK_PICK', { debtId: debt.id, assignmentId: slot.id, idemKey }, { assignmentId: slot.id }, tx);
-      return { alreadyDone: false, debt: await tx.choreDebt.findUniqueOrThrow({ where: { id: debt.id } }) };
+      return { alreadyDone: false, debt: await tx.choreDebt.findUniqueOrThrow({ where: { id: debt.id } }), paybackAssignmentId: slot.id };
     }, TX);
     outbox.flush();
-    return { debtId: out.debt.id, paybackAssignmentId: out.debt.paybackAssignmentId!, alreadyDone: out.alreadyDone };
+    return { debtId: out.debt.id, paybackAssignmentId: out.paybackAssignmentId, alreadyDone: out.alreadyDone };
   }
 
   // -------------------------------------------------------------- tha nợ

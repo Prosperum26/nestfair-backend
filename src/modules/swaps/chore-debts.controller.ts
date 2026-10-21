@@ -11,6 +11,7 @@ import {
   ApiParam,
   ApiTags,
   ApiUnauthorizedResponse,
+  ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import { coded } from '../../common/coded-exception.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -68,6 +69,7 @@ export class ChoreDebtActionsController {
   @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiOkResponse({ type: PaybackResultDto })
   @ApiConflictResponse({ description: 'PAYBACK_WINDOW_NOT_OPEN | PAYBACK_ALREADY_CHOSEN | DEBT_NOT_OPEN' })
+  @ApiUnprocessableEntityResponse({ description: 'IDEMPOTENCY_KEY_REUSED: cùng Idempotency-Key nhưng khác ca | ca không hợp lệ (PAYBACK_TOO_SOON, TARGET_ABSENT…)' })
   pick(
     @CurrentUser() user: AuthUser,
     @Param('debtId') debtId: string,
