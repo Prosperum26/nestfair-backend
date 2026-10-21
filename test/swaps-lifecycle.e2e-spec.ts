@@ -31,10 +31,7 @@ describe('Vòng đời yêu cầu đổi ca quanh ca trực (e2e)', () => {
     events = fx.app.get(EventsService);
   });
   afterEach(() => vi.restoreAllMocks());
-  afterAll(async () => {
-    await fx.prisma.swapLock.deleteMany({});
-    await fx.cleanup();
-  });
+  afterAll(() => fx.cleanup());
 
   const membership = (house: House, i: number) => ({
     id: house.memberId(house.users[i]),

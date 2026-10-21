@@ -11,10 +11,7 @@ describe('Chợ ca: nhận giúp đua nhau (e2e)', () => {
   beforeAll(async () => {
     fx = await createFixture('@e2e-swaps-market.nestfair.test');
   });
-  afterAll(async () => {
-    await fx.prisma.swapLock.deleteMany({});
-    await fx.cleanup();
-  });
+  afterAll(() => fx.cleanup());
 
   const inDays = (n: number) => new Date(Date.now() + n * 24 * HOUR);
 

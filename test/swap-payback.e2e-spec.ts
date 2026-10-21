@@ -23,10 +23,7 @@ describe('Chọn ca bù, tha nợ và auto-pick (e2e)', () => {
     events = fx.app.get(EventsService);
   });
   afterEach(() => vi.restoreAllMocks());
-  afterAll(async () => {
-    await fx.prisma.swapLock.deleteMany({});
-    await fx.cleanup();
-  });
+  afterAll(() => fx.cleanup());
 
   const hoursFromNow = (n: number) => new Date(Date.now() + n * HOUR);
   const DEBTOR = 1; // Thiện: được làm hộ, đang nợ ca

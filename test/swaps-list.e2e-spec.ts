@@ -12,10 +12,7 @@ describe('Danh sách yêu cầu đổi ca và số đếm (e2e)', () => {
   beforeAll(async () => {
     fx = await createFixture('@e2e-swaps-list.nestfair.test');
   });
-  afterAll(async () => {
-    await fx.prisma.swapLock.deleteMany({});
-    await fx.cleanup();
-  });
+  afterAll(() => fx.cleanup());
 
   const monday = addDays(weekStartOf(new Date()), 7);
   const day = (n: number) => addDays(monday, n);

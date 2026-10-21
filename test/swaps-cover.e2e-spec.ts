@@ -16,10 +16,7 @@ describe('Nhờ trực dùm COVER (e2e)', () => {
     events = fx.app.get(EventsService);
   });
   afterEach(() => vi.restoreAllMocks());
-  afterAll(async () => {
-    await fx.prisma.swapLock.deleteMany({});
-    await fx.cleanup();
-  });
+  afterAll(() => fx.cleanup());
 
   const inDays = (n: number) => new Date(Date.now() + n * 24 * HOUR);
   const slot = (house: House, assignee: number, over: { dueAt?: Date; weight?: number } = {}) =>

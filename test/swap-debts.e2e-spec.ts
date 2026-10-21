@@ -20,10 +20,7 @@ describe('Sổ nợ ca (e2e)', () => {
     debts = fx.app.get(ChoreDebtService);
   });
   afterEach(() => vi.restoreAllMocks());
-  afterAll(async () => {
-    await fx.prisma.swapLock.deleteMany({});
-    await fx.cleanup();
-  });
+  afterAll(() => fx.cleanup());
 
   const inDays = (n: number) => new Date(Date.now() + n * 24 * HOUR);
   const member = (h: House, i: number) => h.memberId(h.users[i]);

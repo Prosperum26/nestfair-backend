@@ -24,10 +24,7 @@ describe('Đổi ca EXCHANGE (e2e)', () => {
     events = fx.app.get(EventsService);
   });
   afterEach(() => vi.restoreAllMocks());
-  afterAll(async () => {
-    await fx.prisma.swapLock.deleteMany({});
-    await fx.cleanup();
-  });
+  afterAll(() => fx.cleanup());
 
   // Cả tuần kế tiếp nằm hẳn trong tương lai nên ca không quá hạn khi test chạy.
   const monday = addDays(weekStartOf(new Date()), 7);

@@ -15,10 +15,7 @@ describe('Dọn dẹp đổi ca và nợ ca (e2e)', () => {
     fx = await createFixture('@e2e-swap-maintenance.nestfair.test');
     cron = fx.app.get(SwapCronService);
   });
-  afterAll(async () => {
-    await fx.prisma.swapLock.deleteMany({});
-    await fx.cleanup();
-  });
+  afterAll(() => fx.cleanup());
 
   const inDays = (n: number) => new Date(Date.now() + n * 24 * HOUR);
   const member = (h: House, i: number) => h.memberId(h.users[i]);
