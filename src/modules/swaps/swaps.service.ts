@@ -221,6 +221,12 @@ export class SwapsService {
   }
 
   private async acceptInTx(tx: Db, m: Actor, swapId: string, idemKey: string, now: Date, outbox: Outbox): Promise<AcceptOutcome> {
+    // COVER + PAYBACK có thể cấn trừ sổ nợ: lấy khóa nhà trước (cùng khóa và cùng thứ tự với chọn ca bù, tha nợ,
+    // auto-pick, xáo lịch) rồi mới khóa yêu cầu, để không deadlock và không cấn trừ trùng một khoản nợ.
+    const peek = await tx.choreSwapRequest.findUnique({ where: { id: swapId }, select: { houseId: true, type: true, compensation: true } });
+    if (peek && peek.houseId === m.houseId && peek.type === 'COVER' && peek.compensation === 'PAYBACK') {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${m.houseId}::text))::text`;
+    }
     await tx.$queryRaw`SELECT id FROM chore_swap_requests WHERE id = ${swapId}::uuid FOR UPDATE`;
     const swap = await tx.choreSwapRequest.findUnique({ where: { id: swapId } });
     if (!swap || swap.houseId !== m.houseId) {

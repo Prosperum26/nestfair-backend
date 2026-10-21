@@ -49,6 +49,13 @@ export class ChoreDebtService {
     swap: ChoreSwapRequest,
     creditorMemberId: string,
   ): Promise<{ created: ChoreDebt | null; offsetDebtIds: string[]; paidDebtIds: string[] }> {
+    // Khóa các khoản nợ cũ theo thứ tự cũ nhất trước rồi đọc lại: không ai khác (chọn ca bù, tha nợ…) đổi chúng giữa chừng.
+    await tx.$queryRaw`
+      SELECT id FROM chore_debts
+      WHERE "houseId" = ${swap.houseId}::uuid AND status = 'OPEN'
+        AND "debtorMemberId" = ${creditorMemberId}::uuid AND "creditorMemberId" = ${swap.requesterMemberId}::uuid
+        AND "paybackAssignmentId" IS NULL
+      ORDER BY "createdAt", id FOR UPDATE`;
     const old = await tx.choreDebt.findMany({
       where: {
         houseId: swap.houseId,
