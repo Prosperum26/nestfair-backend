@@ -107,6 +107,42 @@ describe('Toàn vẹn sổ nợ ca (e2e)', () => {
     });
   });
 
+  describe('Tắt việc và kỳ nghỉ cả nhà (A1)', () => {
+    const patchChore = (h: House, choreId: string, body: object) => fx.as(h.users[0].token).patch(`/api/v1/houses/${h.houseId}/chores/${choreId}`, body);
+
+    it('tắt việc của ca bù đã chọn: ca bị hủy, nợ mở lại để chọn (không trỏ vào ca đã hủy)', async () => {
+      const s = await scenario({ coverDone: true, pick: true });
+      await expectDebtInvariants(fx, s.h.houseId, 'trước khi tắt việc');
+      const send = vi.spyOn(events, 'send');
+      await patchChore(s.h, s.payback!.choreId, { isActive: false }).expect(200);
+
+      expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: s.payback!.id } })).status).toBe('CANCELLED');
+      const d = await debtRow(s.debtId);
+      expect(d).toMatchObject({ status: 'OPEN', paybackAssignmentId: null });
+      expect(d.pickOpensAt).not.toBeNull();
+      expect(d.pickDeadlineAt!.getTime() - d.pickOpensAt!.getTime()).toBe(48 * HOUR);
+      await expectDebtInvariants(fx, s.h.houseId, 'sau khi tắt việc');
+      const picks = send.mock.calls.filter((c) => (c[1] as { type: string }).type === 'chore_debt:pick_requested');
+      expect(picks.map((c) => c[0])).toEqual([`user:${s.h.users[CREDITOR].id}`]);
+    });
+
+    it('tắt việc của ca được làm hộ (còn TODO): nợ bị hủy (COVER_MISSED), không kẹt WAITING_COVER', async () => {
+      const s = await scenario({ coverDone: false });
+      await patchChore(s.h, s.cover.choreId, { isActive: false }).expect(200);
+      expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: s.cover.id } })).status).toBe('CANCELLED');
+      expect(await debtRow(s.debtId)).toMatchObject({ status: 'CANCELLED', closeReason: 'COVER_MISSED' });
+    });
+
+    it('tạo kỳ nghỉ cả nhà chứa ngày của ca bù: ca bị hủy, nợ mở lại để chọn', async () => {
+      const s = await scenario({ coverDone: true, pick: true });
+      const date = toDateStr(s.payback!.occurrenceDate);
+      await fx.as(s.h.users[0].token).post(`/api/v1/houses/${s.h.houseId}/breaks`, { startDate: date, endDate: date }).expect(201);
+      expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: s.payback!.id } })).status).toBe('CANCELLED');
+      expect(await debtRow(s.debtId)).toMatchObject({ status: 'OPEN', paybackAssignmentId: null });
+      await expectDebtInvariants(fx, s.h.houseId, 'sau kỳ nghỉ');
+    });
+  });
+
   describe('Khai vắng (c)', () => {
     it('người nợ khai vắng đúng ngày ca bù: ca bù được dời cho người khác, nợ mở lại để chọn, không PAID sai người', async () => {
       const s = await scenario({ coverDone: true, pick: true });

@@ -200,6 +200,17 @@ export class ChoreDebtService {
     return debts.length;
   }
 
+  /**
+   * Các ca vừa bị hủy hàng loạt ngoài luồng đổi ca (tắt việc, tạo kỳ nghỉ cả nhà): ca bù đã chọn thì mở lại cho người
+   * được làm bù chọn ca khác; ca gốc được làm hộ thì hủy nợ (COVER_MISSED). Gọi trong cùng transaction với việc hủy ca.
+   */
+  async onAssignmentsCancelled(tx: Db, outbox: Outbox, assignmentIds: string[], now: Date): Promise<void> {
+    for (const id of assignmentIds) {
+      await this.releasePayback(tx, outbox, id, now);
+      await this.cancelForCover(tx, outbox, id, now, 'COVER_MISSED');
+    }
+  }
+
   /** Ca gốc được làm hộ bị Admin hủy (COVER_MISSED) hoặc giao lại (ADMIN_REASSIGN): nợ không còn lý do tồn tại. */
   async cancelForCover(tx: Db, outbox: Outbox, assignmentId: string, now: Date, reason: 'COVER_MISSED' | 'ADMIN_REASSIGN'): Promise<number> {
     const debts = await tx.choreDebt.findMany({ where: { status: 'OPEN', coverAssignmentId: assignmentId } });

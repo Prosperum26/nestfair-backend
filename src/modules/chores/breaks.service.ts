@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ChoreDebtService } from '../swaps/chore-debt.service.js';
 import { ActivityService } from '../activity/activity.service.js';
 import { actorOfMember } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
@@ -23,6 +24,7 @@ export class BreaksService {
     private readonly audit: AuditService,
     private readonly events: EventsService,
     private readonly activity: ActivityService,
+    private readonly debts: ChoreDebtService,
   ) {}
 
   async list(houseId: string): Promise<BreakDto[]> {
@@ -50,6 +52,7 @@ export class BreaksService {
       const ids = (await tx.choreAssignment.findMany({ where, select: { id: true } })).map((r) => r.id);
       if (ids.length > 0) {
         await tx.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED', version: { increment: 1 } } });
+        await this.debts.onAssignmentsCancelled(tx, outbox, ids, new Date());
         outbox.toHouse(houseId, 'chore:cancelled', { breakId: created.id, assignmentIds: ids }, actor);
       }
       await this.audit.log(
