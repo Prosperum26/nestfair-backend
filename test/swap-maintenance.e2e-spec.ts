@@ -115,4 +115,29 @@ describe('Dọn dẹp đổi ca và nợ ca (e2e)', () => {
     for (const d of [young, assigned, needsAdmin]) expect((await status(d.id)).status).toBe('OPEN');
     expect(await cron.settleStaleDebts(new Date(), [h.houseId])).toBe(0);
   });
+
+  it('settleStaleDebts không tha nợ vừa được chọn ca bù trong lúc cron đang chạy (B3)', async () => {
+    const h = await fx.houseWith(['Hùng', 'Thiện']);
+    const old = await debt(h, { createdAt: inDays(-29) });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const hasLock = new Promise<void>((r) => (locked = r));
+    // Người được làm bù đang chọn ca (giữ khóa dòng nợ) khi cron đọc danh sách nợ cũ.
+    const holder = fx.prisma.$transaction(
+      async (tx) => {
+        await tx.choreDebt.update({ where: { id: old.id }, data: { paybackAssignmentId: randomUUID() } });
+        locked();
+        await gate;
+      },
+      { timeout: 20_000 },
+    );
+    await hasLock;
+    const running = cron.settleStaleDebts(new Date(), [h.houseId]);
+    await new Promise((r) => setTimeout(r, 600));
+    release();
+    await holder;
+    expect(await running).toBe(0);
+    expect(await fx.prisma.choreDebt.findUniqueOrThrow({ where: { id: old.id } })).toMatchObject({ status: 'OPEN', closeReason: null, settledAt: null });
+  });
 });

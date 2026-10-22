@@ -309,11 +309,19 @@ export class ChoreDebtService {
         },
         select: { id: true, houseId: true },
       });
+      let n = 0;
       for (const d of stale) {
-        const { count } = await tx.choreDebt.updateMany({ where: { id: d.id, status: 'OPEN' }, data: { status: 'FORGIVEN', closeReason: 'STALE', settledAt: now } });
-        if (count) outbox.toHouse(d.houseId, 'chore_debt:forgiven', { debtId: d.id, closeReason: 'STALE' });
+        // Điều kiện lặp lại trong WHERE: nợ có thể vừa được chọn ca bù / bị tha / hết lượt chọn từ transaction khác.
+        const { count } = await tx.choreDebt.updateMany({
+          where: { id: d.id, status: 'OPEN', paybackAssignmentId: null, pickAttempts: { lt: MAX_PICK_ATTEMPTS } },
+          data: { status: 'FORGIVEN', closeReason: 'STALE', settledAt: now },
+        });
+        if (count) {
+          n += 1;
+          outbox.toHouse(d.houseId, 'chore_debt:forgiven', { debtId: d.id, closeReason: 'STALE' });
+        }
       }
-      return stale.length;
+      return n;
     });
     outbox.flush();
     return closed;
