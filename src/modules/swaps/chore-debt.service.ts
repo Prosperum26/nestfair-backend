@@ -145,7 +145,12 @@ export class ChoreDebtService {
     if (paid.length) {
       const slot = await tx.choreAssignment.findUnique({ where: { id: assignmentId }, select: { assigneeId: true } });
       for (const d of paid) {
-        if (slot?.assigneeId !== d.debtorMemberId) continue;
+        if (slot?.assigneeId !== d.debtorMemberId) {
+          // Admin đã giao ca bù cho người khác và họ làm xong: nợ chưa được trả, thả ca đó để chọn lại (không tính lượt).
+          const cleared = await tx.choreDebt.update({ where: { id: d.id }, data: { paybackAssignmentId: null } });
+          await this.openPickWindow(tx, outbox, cleared, now, now);
+          continue;
+        }
         await tx.choreDebt.update({ where: { id: d.id }, data: { status: 'PAID', settledAt: now } });
         outbox.toHouse(d.houseId, 'chore_debt:paid', { debtId: d.id });
       }
@@ -174,7 +179,16 @@ export class ChoreDebtService {
   async onAssignmentsMissed(tx: Db, outbox: Outbox, assignmentIds: string[], now: Date): Promise<void> {
     if (!assignmentIds.length) return;
     const missedPaybacks = await tx.choreDebt.findMany({ where: { status: 'OPEN', paybackAssignmentId: { in: assignmentIds } } });
+    const missedSlots = new Map(
+      (await tx.choreAssignment.findMany({ where: { id: { in: assignmentIds } }, select: { id: true, assigneeId: true } })).map((a) => [a.id, a.assigneeId]),
+    );
     for (const d of missedPaybacks) {
+      // Ca bù đang do người khác giữ (Admin REASSIGN) bị bỏ lỡ: không phải lỗi của người nợ, không tính lượt chọn.
+      if (missedSlots.get(d.paybackAssignmentId!) !== d.debtorMemberId) {
+        const cleared = await tx.choreDebt.update({ where: { id: d.id }, data: { paybackAssignmentId: null } });
+        await this.openPickWindow(tx, outbox, cleared, now, now);
+        continue;
+      }
       const attempts = d.pickAttempts + 1;
       if (attempts >= MAX_PICK_ATTEMPTS) {
         await tx.choreDebt.update({ where: { id: d.id }, data: { pickAttempts: attempts, paybackAssignmentId: null, pickOpensAt: null, pickDeadlineAt: null } });

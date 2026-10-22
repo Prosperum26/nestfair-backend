@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { vi } from 'vitest';
 import { addDays, currentWeekStart, openAtOf, toDateStr } from '../src/modules/chores/week.js';
 import { ScheduleService } from '../src/modules/chores/schedule.service.js';
+import { ChoreCronService } from '../src/modules/scheduler/chore-cron.service.js';
 import { EventsService } from '../src/modules/events/events.service.js';
 import { HOUR, makeAssignment } from './support/assignment-fixture.js';
 import { expectDebtInvariants } from './support/debt-invariants.js';
@@ -70,6 +71,37 @@ describe('Toàn vẹn sổ nợ ca (e2e)', () => {
       await fx.prisma.choreAssignment.update({ where: { id: s.payback!.id }, data: { status: 'PENDING_VERIFY', submittedAt: new Date() } });
       await fx.as(s.h.users[DEBTOR].token).patch(`/api/v1/assignments/${s.payback!.id}/verify`, { decision: 'APPROVED' }).expect(200);
       expect(await debtRow(s.debtId)).toMatchObject({ status: 'OPEN', settledAt: null });
+    });
+
+    it('REASSIGN ca bù rồi người mới làm xong: nợ không kẹt, ca bù được thả và cửa sổ chọn bù mở lại 48 giờ (B4)', async () => {
+      const s = await scenario({ coverDone: true, pick: true });
+      await override(s.h, s.payback!.id, { action: 'REASSIGN', userId: s.h.users[0].id }).expect(200);
+      const before = await debtRow(s.debtId);
+      await fx.prisma.choreAssignment.update({ where: { id: s.payback!.id }, data: { status: 'PENDING_VERIFY', submittedAt: new Date() } });
+      const send = vi.spyOn(events, 'send');
+      await fx.as(s.h.users[DEBTOR].token).patch(`/api/v1/assignments/${s.payback!.id}/verify`, { decision: 'APPROVED' }).expect(200);
+
+      const after = await debtRow(s.debtId);
+      expect(after).toMatchObject({ status: 'OPEN', paybackAssignmentId: null, pickAttempts: before.pickAttempts });
+      expect(after.pickOpensAt!.getTime()).toBeLessThanOrEqual(Date.now());
+      expect(after.pickDeadlineAt!.getTime() - after.pickOpensAt!.getTime()).toBe(48 * HOUR);
+      const picks = send.mock.calls.filter((c) => (c[1] as { type: string }).type === 'chore_debt:pick_requested');
+      expect(picks.map((c) => c[0])).toEqual([`user:${s.h.users[CREDITOR].id}`]);
+      await expectDebtInvariants(fx, s.h.houseId, 'sau REASSIGN ca bù rồi DONE');
+    });
+
+    it('REASSIGN ca bù rồi người mới bỏ lỡ: không tính lượt chọn của người nợ, nợ mở lại để chọn (B4)', async () => {
+      const s = await scenario({ coverDone: true, pick: true });
+      await override(s.h, s.payback!.id, { action: 'REASSIGN', userId: s.h.users[0].id }).expect(200);
+      const before = await debtRow(s.debtId);
+      await fx.prisma.choreAssignment.update({ where: { id: s.payback!.id }, data: { dueAt: new Date(Date.now() - 5 * HOUR) } });
+      await fx.app.get(ChoreCronService).markMissed(new Date(), [s.h.houseId]);
+
+      const after = await debtRow(s.debtId);
+      expect(after).toMatchObject({ status: 'OPEN', paybackAssignmentId: null, pickAttempts: before.pickAttempts });
+      expect(after.pickOpensAt!.getTime()).toBeLessThanOrEqual(Date.now());
+      expect(after.pickDeadlineAt!.getTime() - after.pickOpensAt!.getTime()).toBe(48 * HOUR);
+      await expectDebtInvariants(fx, s.h.houseId, 'sau REASSIGN ca bù rồi MISSED');
     });
 
     it('người nợ tự làm ca bù thì vẫn đóng nợ PAID như cũ', async () => {
