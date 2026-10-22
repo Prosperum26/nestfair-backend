@@ -89,9 +89,19 @@ export class ChoreDebtService {
       },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
+    // D17: chỉ nợ cũ mà ca gốc của nó đã DONE mới bị cấn trừ (nợ có ca gốc chưa xong có thể còn bị hủy khi ca đó MISSED).
+    const doneCovers = new Set(
+      (
+        await tx.choreAssignment.findMany({
+          where: { id: { in: old.map((d) => d.coverAssignmentId) }, status: 'DONE' },
+          select: { id: true },
+        })
+      ).map((a) => a.id),
+    );
     let remaining = current.weight;
     const offsetIds: string[] = [];
     for (const d of old) {
+      if (!doneCovers.has(d.coverAssignmentId)) continue;
       if (remaining <= 0) break;
       offsetIds.push(d.id);
       if (remaining >= d.weight) {

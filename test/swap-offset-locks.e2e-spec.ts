@@ -43,8 +43,9 @@ describe('Khóa khi cấn trừ nợ (e2e)', () => {
       const nextWeek = addDays(currentWeekStart(), 7);
       const y = await makeAssignment(fx, h, { assignee: A, occurrenceDate: addDays(nextWeek, 2), dueAt: hoursFromNow(120) }, { weight: 2, title: 'Ca bù' });
       // Mai đang nợ Quân 2 điểm, cửa sổ chọn bù đang mở.
+      const oldCover = await makeAssignment(fx, h, { assignee: A, status: 'DONE' }, { weight: 2 });
       const old = await fx.prisma.choreDebt.create({
-        data: { houseId: h.houseId, debtorMemberId: b, creditorMemberId: a, swapRequestId: randomUUID(), coverAssignmentId: randomUUID(), weight: 2, pickOpensAt: hoursFromNow(-1), pickDeadlineAt: hoursFromNow(40) },
+        data: { houseId: h.houseId, debtorMemberId: b, creditorMemberId: a, swapRequestId: randomUUID(), coverAssignmentId: oldCover.id, weight: 2, pickOpensAt: hoursFromNow(-1), pickDeadlineAt: hoursFromNow(40) },
       });
       const { x, swapId } = await coverPayback(h, 2);
       await fx.as(h.users[B].token).patch(`/api/v1/swaps/${swapId}/accept`).set('Idempotency-Key', randomUUID()).expect(200);
@@ -100,8 +101,9 @@ describe('Khóa khi cấn trừ nợ (e2e)', () => {
     const b = h.memberId(h.users[B]);
     // Mai nợ Quân 3 + 2 + 1 = 6 điểm; Quân nhờ Mai ba ca 2 điểm (6 điểm) và cả ba ca được duyệt cùng lúc.
     for (const weight of [3, 2, 1]) {
+      const oldCover = await makeAssignment(fx, h, { assignee: A, status: 'DONE' }, { weight });
       await fx.prisma.choreDebt.create({
-        data: { houseId: h.houseId, debtorMemberId: b, creditorMemberId: a, swapRequestId: randomUUID(), coverAssignmentId: randomUUID(), weight },
+        data: { houseId: h.houseId, debtorMemberId: b, creditorMemberId: a, swapRequestId: randomUUID(), coverAssignmentId: oldCover.id, weight },
       });
     }
     const slots: string[] = [];
