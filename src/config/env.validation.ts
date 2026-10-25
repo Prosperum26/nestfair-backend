@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsString,
   MinLength,
+  ValidateIf,
   validateSync,
 } from 'class-validator';
 
@@ -49,6 +50,16 @@ export class Env {
   @IsOptional()
   @IsString()
   CLOUDINARY_API_SECRET?: string;
+
+  // Gemini (OCR hóa đơn): để trống key = tắt OCR, quét trả về nhập tay. Có key thì bắt buộc khai báo model.
+  @IsOptional()
+  @IsString()
+  GEMINI_API_KEY?: string;
+
+  @ValidateIf((o: Env) => !!o.GEMINI_API_KEY)
+  @IsString()
+  @MinLength(1)
+  GEMINI_MODEL?: string;
 
   @IsOptional()
   @IsString()

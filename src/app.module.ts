@@ -9,6 +9,7 @@ import { AuthModule } from './modules/auth/auth.module.js';
 import { ChoresModule } from './modules/chores/chores.module.js';
 import { EventsModule } from './modules/events/events.module.js';
 import { ExpensesModule } from './modules/expenses/expenses.module.js';
+import { ReceiptsModule } from './modules/receipts/receipts.module.js';
 import { HousesModule } from './modules/houses/houses.module.js';
 import { SchedulerModule } from './modules/scheduler/scheduler.module.js';
 import { SettlementsModule } from './modules/settlements/settlements.module.js';
@@ -24,6 +25,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     HousesModule,
     ChoresModule,
     ExpensesModule,
+    ReceiptsModule,
     SettlementsModule,
     EventsModule,
     ScheduleModule.forRoot(),
