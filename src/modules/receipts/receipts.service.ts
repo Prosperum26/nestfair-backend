@@ -10,7 +10,7 @@ import { type UploadedImage, validateImageFile } from '../uploads/image-validati
 import type { ReceiptScanResultDto } from './dto/receipt-scan-result.dto.js';
 import { ExtractorError, RECEIPT_EXTRACTOR, type RawReceipt, type ReceiptExtractor, type ScanFailureReason } from './receipt-extractor.js';
 import { FAILURE_MESSAGES, type SanityResult, sanitizeReceipt } from './receipt-sanity.js';
-import { vnDayStart } from './vn-day.js';
+import { vnDayStart } from '../../common/vn-day.js';
 
 /** Đặc tả XI: tối đa 20 lượt quét mỗi nhà mỗi ngày (giờ VN). */
 export const DAILY_SCAN_LIMIT = 20;

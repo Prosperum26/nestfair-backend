@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { vnDayStart } from '../src/modules/receipts/vn-day.js';
+import { vnDayStart } from '../src/common/vn-day.js';
 import { ExtractorError, RECEIPT_EXTRACTOR, type RawReceipt } from '../src/modules/receipts/receipt-extractor.js';
 import { CloudinaryService } from '../src/modules/uploads/cloudinary.service.js';
 import { png } from './support/assignment-fixture.js';
