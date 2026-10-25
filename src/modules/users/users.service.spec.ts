@@ -12,6 +12,7 @@ const current = {
   bankAccount: null as string | null,
   avatarUrl: null,
   ocrConsentAt: null as Date | null,
+  assistantConsentAt: null as Date | null,
   createdAt: new Date('2026-10-08T00:00:00Z'),
 };
 
@@ -145,6 +146,49 @@ describe('UsersService', () => {
     it('user không còn tồn tại thì 401', async () => {
       prisma.user.findUnique.mockResolvedValue(null);
       await expect(service.setOcrConsent(userId, true, now)).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+  });
+
+  describe('setAssistantConsent (đồng ý Trợ lý AI chat qua Gemini)', () => {
+    const now = new Date('2026-10-20T03:00:00Z');
+
+    it('đồng ý lần đầu: ghi mốc đồng ý, chỉ select cột công khai', async () => {
+      const result = await service.setAssistantConsent(userId, true, now);
+
+      const args = prisma.user.update.mock.calls[0][0];
+      expect(args.where).toEqual({ id: userId });
+      expect(args.data).toEqual({ assistantConsentAt: now });
+      expect(args.select).toBeDefined();
+      expect(result.assistantConsentAt).toEqual(now);
+    });
+
+    it('đồng ý lần hai thì giữ mốc đầu tiên, không ghi lại', async () => {
+      const first = new Date('2026-10-01T00:00:00Z');
+      prisma.user.findUnique.mockResolvedValue({ ...current, assistantConsentAt: first });
+
+      const result = await service.setAssistantConsent(userId, true, now);
+
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(result.assistantConsentAt).toEqual(first);
+    });
+
+    it('tắt: xóa mốc đồng ý (null)', async () => {
+      prisma.user.findUnique.mockResolvedValue({ ...current, assistantConsentAt: now });
+
+      const result = await service.setAssistantConsent(userId, false, now);
+
+      expect(prisma.user.update.mock.calls[0][0].data).toEqual({ assistantConsentAt: null });
+      expect(result.assistantConsentAt).toBeNull();
+    });
+
+    it('tắt khi chưa đồng ý thì không ghi gì', async () => {
+      await service.setAssistantConsent(userId, false, now);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('user không còn tồn tại thì 401', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      await expect(service.setAssistantConsent(userId, true, now)).rejects.toBeInstanceOf(UnauthorizedException);
     });
   });
 });

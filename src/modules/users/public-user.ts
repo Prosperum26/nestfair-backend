@@ -13,6 +13,7 @@ export const publicUserSelect = {
   bankAccount: true,
   avatarUrl: true,
   ocrConsentAt: true,
+  assistantConsentAt: true,
   createdAt: true,
 } satisfies Prisma.UserSelect;
 
