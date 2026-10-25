@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
+import { AssistantModule } from './modules/assistant/assistant.module.js';
 import { validateEnv } from './config/env.validation.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { ChoresModule } from './modules/chores/chores.module.js';
@@ -26,6 +27,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     ChoresModule,
     ExpensesModule,
     ReceiptsModule,
+    AssistantModule,
     SettlementsModule,
     EventsModule,
     ScheduleModule.forRoot(),
