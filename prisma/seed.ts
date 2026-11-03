@@ -183,6 +183,21 @@ async function seedChores(houseId: string, users: Record<string, { id: string }>
 /** Giờ trưa (giờ nhà, UTC+7) của một ngày: tránh lệch ngày khi hiển thị theo múi giờ. */
 const at = (ymd: string) => new Date(`${ymd}T12:00:00+07:00`);
 
+/** Ngày hôm nay (giờ VN) dạng YYYY-MM-DD. */
+const vnToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+
+/** Ngày của thứ kế tiếp trong tuần (1 = Thứ Hai…7 = Chủ Nhật) theo lịch VN, luôn ở tương lai. */
+const vnNextWeekday = (isoWeekday: number) => {
+  const base = new Date(`${vnToday()}T00:00:00+07:00`);
+  for (let add = 1; add <= 7; add += 1) {
+    // Mốc 00:00+07:00 cộng 7 giờ là 00:00 UTC cùng ngày lịch VN, đọc an toàn qua getUTC*.
+    const vn = new Date(base.getTime() + (add * 86_400_000 + 7 * 3_600_000));
+    const dow = vn.getUTCDay() === 0 ? 7 : vn.getUTCDay();
+    if (dow === isoWeekday) return vn.toISOString().slice(0, 10);
+  }
+  throw new Error('Không tìm thấy thứ trong tuần kế tiếp');
+};
+
 /**
  * Sổ chi theo Design.md mục 7: tháng 10 tổng 2.280.000đ (6 hóa đơn, ảnh 07), tháng 9 đã tất toán hết
  * bằng 3 settlement CONFIRMED, và 1 settlement PENDING (Thiện báo đã chuyển cho Mai, ảnh 09).
@@ -296,6 +311,132 @@ async function seedExpenses(houseId: string, users: Record<string, { id: string 
   }
 }
 
+/**
+ * Chat Trợ lý + nhắc nhở demo cho Hùng (màn 19): thread "WC có mùi" với trả lời có 3 nút hành
+ * động (nút tạo nhắc đã bấm nên nhắc ASSISTANT 20:00 hôm nay xuất hiện ở panel với chip
+ * "Từ trợ lý"), 1 nhắc USER thứ Sáu và 1 nhắc SYSTEM thứ Bảy (chỉ sửa được, D12). Xóa dữ liệu
+ * chat + nhắc của nhà demo trước khi tạo nên chạy lại được.
+ */
+async function seedAssistantReminders(houseId: string, users: Record<string, { id: string }>) {
+  const hung = users.hung.id;
+
+  await prisma.assistantMessage.deleteMany({ where: { houseId } });
+  await prisma.reminder.deleteMany({ where: { houseId } });
+
+  const threadId = crypto.randomUUID();
+  const today = vnToday();
+  const minutes = (iso: string, hhmm: string) => new Date(`${iso}T${hhmm}:00+07:00`);
+
+  await prisma.assistantMessage.create({
+    data: {
+      userId: hung,
+      houseId,
+      threadId,
+      role: 'USER',
+      content: 'WC phòng mình có mùi hôi quá, xử lý sao?',
+      createdAt: minutes(today, '19:02'),
+    },
+  });
+
+  const actions = [
+    {
+      type: 'CREATE_ADHOC_TASK',
+      label: 'Việc đột xuất: Cọ WC (vòng quay)',
+      payload: { title: 'Cọ WC (vòng quay)' },
+    },
+    {
+      type: 'DRAFT_EXPENSE',
+      label: 'Ghi khoản mua: Viên tây bồn cầu ~35.000đ',
+      payload: { title: 'Viên tây bồn cầu', estimatedAmount: 35_000 },
+    },
+    {
+      type: 'CREATE_REMINDER',
+      label: 'Nhắc mình tối nay 20:00',
+      payload: { title: 'Thả viên tây bồn cầu, dễ qua đêm', remindAt: `${today}T20:00:00+07:00` },
+    },
+  ];
+  const assistantReply = await prisma.assistantMessage.create({
+    data: {
+      userId: hung,
+      houseId,
+      threadId,
+      role: 'ASSISTANT',
+      content:
+        'Mùi WC thường do ống thoát sàn bị khô hoặc cặn trong bồn cầu. Thử theo thứ tự:\n' +
+        '1. Đổ 1 ca nước vào ống thoát sàn để tạo nút nước chắn mùi.\n' +
+        '2. Thả viên tẩy bồn cầu, để qua đêm rồi cọ lại.\n' +
+        '3. Bật quạt hút 15 phút sau khi tắm.\n' +
+        'Sau 2 ngày vẫn còn mùi thì nên báo chủ trọ kiểm tra ống thông hơi.',
+      category: 'INCIDENT',
+      actionsJson: actions,
+      createdAt: new Date(minutes(today, '19:02').getTime() + 30_000),
+    },
+  });
+
+  await prisma.assistantMessage.create({
+    data: {
+      userId: hung,
+      houseId,
+      threadId,
+      role: 'USER',
+      content: 'Nói sao để bạn bớt ồn sau 11h mà không mất lòng?',
+      createdAt: minutes(today, '19:10'),
+    },
+  });
+
+  await prisma.assistantMessage.create({
+    data: {
+      userId: hung,
+      houseId,
+      threadId,
+      role: 'ASSISTANT',
+      content:
+        'Nội quy nhà điều 1 ghi "giữ yên lặng sau 23:00", nên bạn có thể nhắc nhẹ dựa vào đó. Ví dụ: ' +
+        '"Tuần này mình thi, sau 11h mọi người đeo tai nghe giúp mình nha, cảm ơn nhiều!" ' +
+        'Nói trực tiếp kịp lúc hài hước sẽ dễ nghe hơn nhắn trong nhóm.',
+      category: 'EMOTIONAL',
+      createdAt: new Date(minutes(today, '19:10').getTime() + 40_000),
+    },
+  });
+
+  // 3 nhắc của Hùng ở panel (ảnh 19). Nhắc ASSISTANT gắn dedupeKey đúng nút thứ 3 của tin trả
+  // lời nên nút đó trong chat hiện trạng thái "đã bấm". SYSTEM chỉ sửa được, không xóa (D12).
+  await prisma.reminder.create({
+    data: {
+      userId: hung,
+      houseId,
+      title: 'Thả viên tây bồn cầu, dễ qua đêm',
+      remindAt: minutes(today, '20:00'),
+      source: 'ASSISTANT',
+      dedupeKey: `msg:${assistantReply.id}:2`,
+    },
+  });
+  await prisma.reminder.create({
+    data: {
+      userId: hung,
+      houseId,
+      title: 'Đóng tiền nhà cho chủ trọ',
+      remindAt: minutes(vnNextWeekday(5), '19:00'),
+      source: 'USER',
+    },
+  });
+  await prisma.reminder.create({
+    data: {
+      userId: hung,
+      houseId,
+      title: 'Nhắc ca rửa chén buổi tối của bạn',
+      remindAt: minutes(vnNextWeekday(6), '08:00'),
+      source: 'SYSTEM',
+    },
+  });
+
+  // Hùng đã đồng ý gửi chat cho Gemini (D5) nên demo chat được ngay, không dừng ở hộp thoại.
+  await prisma.user.update({
+    where: { id: hung },
+    data: { assistantConsentAt: new Date() },
+  });
+}
+
 async function main() {
   const started = Date.now();
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
@@ -348,6 +489,7 @@ async function main() {
 
   await seedChores(house.id, users);
   await seedExpenses(house.id, users);
+  await seedAssistantReminders(house.id, users);
 
   console.log(
     `Seed xong trong ${Date.now() - started}ms: ${house.name} (mã ${INVITE_CODE}), ` +

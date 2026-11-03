@@ -240,3 +240,47 @@ Gửi `receiptScanId` để gắn bản nháp: kiểm tra cùng nhà và chưa d
 scan của nhà khác hoặc không có thì `404`. Khoản `ITEMIZED` không lưu danh sách món: sửa tiền hoặc kiểu chia phải gửi lại `items`. `PATCH` không nhận `receiptScanId`.
 
 **Giới hạn đã biết.** Refresh trang xác nhận thì mất bản nháp phía client (chưa có API đọc lại); ảnh của scan không được dùng chưa có job dọn.
+
+## Trợ lý & Nhắc nhở (Issue #12)
+
+Chat riêng tư với trợ lý phòng trọ (Gemini) và nhắc nhở cá nhân. **AI không bao giờ tự ghi dữ liệu**: `suggestedActions` chỉ là nút gợi ý,
+người dùng bấm thì client mới gọi API thường (`POST /reminders`, mở form chi tiêu có điền sẵn). Backend không tạo `Reminder` hay `Expense` khi trả lời chat.
+
+**Bật.** Dùng chung `GEMINI_API_KEY` / `GEMINI_MODEL` với OCR (provider `GENAI_CLIENT` ở `AiModule`). Không có key, Gemini lỗi hoặc quá 10 giây thì
+`POST` vẫn `201` với tin dự phòng "Trợ lý đang bận, thử lại sau ít phút" (không có nút hành động); nhắc nhở thủ công vẫn dùng được.
+
+**Quyền riêng tư.** Tin nhắn theo `userId`: không API nào trả tin của người khác, kể cả cùng nhà. Gửi nội dung chat cho Google cần đồng ý riêng theo người:
+`PATCH /users/me/assistant-consent { enabled }` đặt `User.assistantConsentAt` (khác `ocrConsentAt` vì dữ liệu khác). Chưa đồng ý thì `403 ASSISTANT_CONSENT_REQUIRED`,
+kiểm tra trước hạn mức và trước khi gọi Gemini. Chỉ gửi dữ liệu tối thiểu: tên nhà, **số** thành viên (không gửi tên người khác), nội quy (≤ 2000 ký tự),
+ca trực tuần này của người hỏi, giờ hiện tại, 10 tin gần nhất của thread. Nội dung người dùng và nội quy luôn là dữ liệu, không là chỉ thị (nằm ở `contents`, không ở `systemInstruction`).
+
+| Method | Path | Ghi chú |
+| :-- | :-- | :-- |
+| GET | `/houses/:houseId/assistant/messages?threadId=&cursor=&limit=` | `{ items, nextCursor, threadId }`, chỉ tin của người gọi. `limit` mặc định 30, tối đa 50, `items` từ cũ đến mới. Không có `threadId` thì lấy thread mới nhất. |
+| POST | `/houses/:houseId/assistant/messages` | `{ content (1–1000), threadId? }` → `201 { threadId, userMessage, assistantMessage, remaining }`. |
+| GET | `/reminders?state=upcoming\|all&limit=` | Nhắc của tôi (mảng `ReminderDto[]`). `upcoming` = chưa gửi, `remindAt` tăng dần. |
+| POST | `/reminders` | `{ houseId, title (1–120), remindAt, sourceMessageId?, actionIndex? }` → `201`. Có `sourceMessageId` thì `source = ASSISTANT`, `dedupeKey = msg:<id>:<index>`. |
+| PATCH | `/reminders/:id` | `{ title?, remindAt? }`. Đã gửi → `409 REMINDER_ALREADY_SENT`. |
+| DELETE | `/reminders/:id` | `200 { ok: true }`. Nhắc `SYSTEM` → `403 REMINDER_NOT_DELETABLE`. |
+| PATCH | `/users/me/assistant-consent` | `{ enabled }` → `PublicUserDto` có `assistantConsentAt`. |
+
+Mã lỗi: `ASSISTANT_CONSENT_REQUIRED` 403, `ASSISTANT_QUOTA_EXCEEDED` 429 (kèm `resetAt`), `REMIND_AT_INVALID` 400 (phải ở tương lai, trong 1 năm),
+`REMINDER_ALREADY_CREATED` 409 (bấm nút AI hai lần), `REMINDER_ALREADY_SENT` 409, `REMINDER_NOT_DELETABLE` 403, `REMINDER_NOT_FOUND` 404,
+`MESSAGE_NOT_FOUND` 404, `HOUSE_FORBIDDEN` 403, `REMINDER_SOURCE_INVALID` / `REMINDER_ACTION_INVALID` 400.
+
+**Hạn mức.** 30 tin `USER` / người / ngày (ngày giờ VN, cộng mọi nhà của người đó, tính cả lần Gemini lỗi). Tin thứ 31 trả `429 ASSISTANT_QUOTA_EXCEEDED`
+kèm `resetAt` (00:00 VN hôm sau), không lưu và không gọi Gemini.
+
+**Hành động đề xuất.** `sanitizeReply` giữ tối đa 4 hành động thuộc `CREATE_REMINDER` | `CREATE_ADHOC_TASK` | `DRAFT_EXPENSE`; `CREATE_REMINDER` phải có `remindAt`
+hợp lệ ở tương lai (trong 1 năm) nếu không thì bị bỏ; `estimatedAmount` phải là số nguyên 1…1.000.000.000. `actions[].done` cho biết nút `CREATE_REMINDER` đã được bấm (theo `dedupeKey`).
+"Cuộc trò chuyện mới" là `threadId` mới; không có API xóa lịch sử.
+
+**Cron** (`SchedulerModule`, múi giờ `Asia/Ho_Chi_Minh`, bỏ qua khi `NODE_ENV=test`):
+- `ReminderCronService.dispatchDue` mỗi phút: quét nhắc đến hạn bằng `FOR UPDATE SKIP LOCKED` (nhiều instance không bắn đôi), đặt `sentAt`, thêm tin `SYSTEM` vào chat
+  (người offline thấy lại sau), rồi sau commit mới emit `reminder:due { reminderId, title }` tới room `user:<userId>`. Nhắc quá hạn nhiều giờ vẫn bắn đúng một lần.
+- `sendDailyDigest` 08:00: một nhắc `SYSTEM` tổng hợp mỗi người mỗi ngày về ca `TODO` hôm nay, `dedupeKey = digest:<YYYY-MM-DD>` nên chạy lại không tạo trùng. Nhắc `SYSTEM` sửa giờ được, không xóa được.
+
+**Giới hạn đã biết.**
+- `CREATE_ADHOC_TASK` có trong schema và trong nút nhưng **chưa có API thực thi** (chưa có Vòng quay / việc đột xuất); frontend khóa nút kèm "Sắp có".
+- Digest 08:00 hiện chỉ gồm ca trực hôm nay. Yêu cầu đổi ca sắp hết hạn và nợ ca chưa có bảng nguồn: issue đổi ca cắm thêm qua provider `DIGEST_SOURCES` (interface `DigestSource`).
+- `ApiError` ở frontend bỏ phần thừa của body lỗi nên `resetAt` thường không tới được UI; UI hiện câu "Mai mình trò chuyện tiếp nhé".
