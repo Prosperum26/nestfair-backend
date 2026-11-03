@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   UploadedFile,
@@ -124,5 +125,20 @@ export class ListingController {
     @Param('photoId', ParseUUIDPipe) photoId: string,
   ): Promise<{ ok: true }> {
     return this.photos.remove(m.houseId, photoId);
+  }
+
+  @Patch('photos/:photoId/cover')
+  @HouseRoles('ADMIN')
+  @UseGuards(HouseRolesGuard)
+  @ApiParam({ name: 'photoId', format: 'uuid' })
+  @ApiOperation({ summary: 'Trưởng phòng chọn ảnh bìa: đưa ảnh Phòng ngủ lên đầu nhóm' })
+  @ApiOkResponse({ type: ListingPhotoDto })
+  @ApiNotFoundResponse({ description: 'Không có ảnh này trong tin của nhà' })
+  @ApiUnprocessableEntityResponse({ description: 'COVER_CATEGORY_INVALID: chỉ ảnh Phòng ngủ làm được ảnh bìa' })
+  setCover(
+    @CurrentMembership() m: HouseMembership,
+    @Param('photoId', ParseUUIDPipe) photoId: string,
+  ): Promise<ListingPhotoDto> {
+    return this.photos.setCover(m.houseId, photoId);
   }
 }

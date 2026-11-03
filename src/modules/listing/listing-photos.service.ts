@@ -105,6 +105,32 @@ export class ListingPhotosService {
     return { ok: true };
   }
 
+  /** Ảnh bìa = ảnh Phòng ngủ đứng đầu nhóm: đưa ảnh này lên sortOrder 0, đánh số lại cả nhóm 0..n-1. */
+  async setCover(houseId: string, photoId: string): Promise<ListingPhotoDto> {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockHouse(tx, houseId);
+      const photo = await tx.listingPhoto.findFirst({ where: { id: photoId, listing: { houseId } } });
+      if (!photo) throw new NotFoundException('Không tìm thấy ảnh.');
+      if (photo.category !== 'BEDROOM') {
+        throw coded(
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          'COVER_CATEGORY_INVALID',
+          'Chỉ ảnh Phòng ngủ mới làm được ảnh bìa.',
+        );
+      }
+
+      const group = await tx.listingPhoto.findMany({
+        where: { listingId: photo.listingId, category: 'BEDROOM' },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      });
+      const ordered = [photo, ...group.filter((p) => p.id !== photo.id)];
+      for (const [index, p] of ordered.entries()) {
+        if (p.sortOrder !== index) await tx.listingPhoto.update({ where: { id: p.id }, data: { sortOrder: index } });
+      }
+      return { id: photo.id, category: photo.category, url: photo.url, sortOrder: 0 };
+    });
+  }
+
   private lockHouse(tx: Pick<PrismaService, '$queryRaw'>, houseId: string) {
     return tx.$queryRaw`SELECT id FROM houses WHERE id = ${houseId}::uuid FOR UPDATE`;
   }

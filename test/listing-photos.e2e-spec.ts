@@ -331,4 +331,137 @@ describe('Listing photos API (e2e)', () => {
       await fx.as(a.admin.token).delete(`${base(b.houseId)}/photos/${photoOfB.id}`).expect(403);
     });
   });
+
+  describe('PATCH /houses/:houseId/listing/photos/:photoId/cover', () => {
+    const cover = (token: string, houseId: string, photoId: string) =>
+      fx.as(token).patch(`${base(houseId)}/photos/${photoId}/cover`);
+    const bedroomOrder = async (listingId: string) =>
+      (await fx.prisma.listingPhoto.findMany({ where: { listingId, category: 'BEDROOM' }, orderBy: { sortOrder: 'asc' } })).map(
+        (p) => [p.url.split('/').pop(), p.sortOrder],
+      );
+
+    it('đưa ảnh Phòng ngủ lên đầu nhóm và đánh số lại 0..n-1; trả ảnh với sortOrder 0', async () => {
+      const { houseId, admin, listing } = await withListing();
+      await seedPhoto(listing.id, 'BEDROOM', 0, 'a');
+      await seedPhoto(listing.id, 'BEDROOM', 1, 'b');
+      const c = await seedPhoto(listing.id, 'BEDROOM', 2, 'c');
+
+      const res = await cover(admin.token, houseId, c.id).expect(200);
+
+      expect(res.body).toEqual({ id: c.id, category: 'BEDROOM', url: c.url, sortOrder: 0 });
+      expect(await bedroomOrder(listing.id)).toEqual([
+        ['c2.jpg', 0],
+        ['a0.jpg', 1],
+        ['b1.jpg', 2],
+      ]);
+    });
+
+    it('nhóm có khoảng trống sortOrder (sau khi xóa ảnh) vẫn được đánh số liền 0..n-1', async () => {
+      const { houseId, admin, listing } = await withListing();
+      await seedPhoto(listing.id, 'BEDROOM', 0, 'a');
+      await seedPhoto(listing.id, 'BEDROOM', 3, 'b');
+      const c = await seedPhoto(listing.id, 'BEDROOM', 7, 'c');
+
+      await cover(admin.token, houseId, c.id).expect(200);
+
+      expect((await bedroomOrder(listing.id)).map(([, order]) => order)).toEqual([0, 1, 2]);
+      expect((await bedroomOrder(listing.id))[0][0]).toBe('c7.jpg');
+    });
+
+    it('ảnh đã là ảnh bìa thì không đổi gì (200)', async () => {
+      const { houseId, admin, listing } = await withListing();
+      const a = await seedPhoto(listing.id, 'BEDROOM', 0, 'a');
+      await seedPhoto(listing.id, 'BEDROOM', 1, 'b');
+
+      const res = await cover(admin.token, houseId, a.id).expect(200);
+
+      expect(res.body.sortOrder).toBe(0);
+      expect(await bedroomOrder(listing.id)).toEqual([
+        ['a0.jpg', 0],
+        ['b1.jpg', 1],
+      ]);
+    });
+
+    it('không đụng vào ảnh của nhóm khác', async () => {
+      const { houseId, admin, listing } = await withListing();
+      await seedPhoto(listing.id, 'BEDROOM', 0, 'a');
+      const b = await seedPhoto(listing.id, 'BEDROOM', 1, 'b');
+      await seedPhoto(listing.id, 'BATHROOM', 4, 'w');
+      await seedPhoto(listing.id, 'LIVING', 2, 'l');
+
+      await cover(admin.token, houseId, b.id).expect(200);
+
+      const others = await fx.prisma.listingPhoto.findMany({
+        where: { listingId: listing.id, category: { not: 'BEDROOM' } },
+        orderBy: { category: 'asc' },
+      });
+      expect(others.map((p) => [p.category, p.sortOrder])).toEqual([
+        ['BATHROOM', 4],
+        ['LIVING', 2],
+      ]);
+    });
+
+    it('ảnh bìa hiện ở đầu nhóm Phòng ngủ trong GET', async () => {
+      const { houseId, admin, listing } = await withListing();
+      await seedPhoto(listing.id, 'BEDROOM', 0, 'a');
+      const b = await seedPhoto(listing.id, 'BEDROOM', 1, 'b');
+
+      await cover(admin.token, houseId, b.id).expect(200);
+
+      const res = await fx.as(admin.token).get(base(houseId)).expect(200);
+      expect(res.body.listing.photos[0]).toMatchObject({ id: b.id, sortOrder: 0 });
+    });
+
+    it('ảnh nhóm khác Phòng ngủ → 422, thứ tự không đổi', async () => {
+      const { houseId, admin, listing } = await withListing();
+      await seedPhoto(listing.id, 'BATHROOM', 0, 'w');
+      const second = await seedPhoto(listing.id, 'BATHROOM', 1, 'w');
+
+      const res = await cover(admin.token, houseId, second.id).expect(422);
+
+      expect(res.body).toMatchObject({ code: 'COVER_CATEGORY_INVALID' });
+      expect((await fx.prisma.listingPhoto.findUniqueOrThrow({ where: { id: second.id } })).sortOrder).toBe(1);
+    });
+
+    it('tin OPEN vẫn đổi được ảnh bìa', async () => {
+      const { houseId, admin, listing } = await withListing();
+      await seedPhoto(listing.id, 'BEDROOM', 0, 'a');
+      const b = await seedPhoto(listing.id, 'BEDROOM', 1, 'b');
+      await fx.prisma.roomListing.update({ where: { id: listing.id }, data: { status: 'OPEN' } });
+
+      await cover(admin.token, houseId, b.id).expect(200);
+    });
+
+    it('photoId của nhà khác → 404; không tồn tại → 404; không phải UUID → 400', async () => {
+      const a = await withListing();
+      const b = await withListing();
+      const photoOfB = await seedPhoto(b.listing.id, 'BEDROOM', 1, 'b');
+
+      await cover(a.admin.token, a.houseId, photoOfB.id).expect(404);
+      await cover(a.admin.token, a.houseId, '00000000-0000-4000-8000-000000000000').expect(404);
+      await cover(a.admin.token, a.houseId, 'khong-phai-uuid').expect(400);
+      expect((await fx.prisma.listingPhoto.findUniqueOrThrow({ where: { id: photoOfB.id } })).sortOrder).toBe(1);
+    });
+
+    it('thành viên thường → 403; trưởng phòng nhà A dùng URL nhà B → 403', async () => {
+      const a = await withListing();
+      const b = await withListing();
+      const photo = await seedPhoto(a.listing.id, 'BEDROOM', 1, 'a');
+      const photoOfB = await seedPhoto(b.listing.id, 'BEDROOM', 1, 'b');
+
+      await cover(a.member.token, a.houseId, photo.id).expect(403);
+      await cover(a.admin.token, b.houseId, photoOfB.id).expect(403);
+    });
+
+    it('hai lần đặt bìa song song cho hai ảnh: kết thúc vẫn là dãy 0..n-1 không trùng', async () => {
+      const { houseId, admin, listing } = await withListing();
+      await seedPhoto(listing.id, 'BEDROOM', 0, 'a');
+      const b = await seedPhoto(listing.id, 'BEDROOM', 1, 'b');
+      const c = await seedPhoto(listing.id, 'BEDROOM', 2, 'c');
+
+      await Promise.all([cover(admin.token, houseId, b.id), cover(admin.token, houseId, c.id)]);
+
+      expect((await bedroomOrder(listing.id)).map(([, order]) => order)).toEqual([0, 1, 2]);
+    });
+  });
 });
