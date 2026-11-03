@@ -18,10 +18,16 @@ const STATUS_NAMES: Record<number, string> = {
 /**
  * Lỗi nghiệp vụ có mã máy đọc được. Giữ nguyên format NestJS chuẩn
  * `{ statusCode, message, error }` (AGENTS.md mục 5) và thêm `code` theo đặc tả Issue #4.
+ * `extra` thêm trường tùy ý vào body (vd. `missing`); đặt trước nên không ghi đè được bốn trường chuẩn.
  */
-export function coded(status: HttpStatus, code: string, message: string): HttpException {
+export function coded(
+  status: HttpStatus,
+  code: string,
+  message: string,
+  extra?: Record<string, unknown>,
+): HttpException {
   return new HttpException(
-    { statusCode: status, message, error: STATUS_NAMES[status] ?? 'Error', code },
+    { ...extra, statusCode: status, message, error: STATUS_NAMES[status] ?? 'Error', code },
     status,
   );
 }

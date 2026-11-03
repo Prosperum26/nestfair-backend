@@ -14,6 +14,42 @@ describe('coded', () => {
     });
   });
 
+  it('có extra thì body chứa các trường của extra', () => {
+    const ex = coded(HttpStatus.UNPROCESSABLE_ENTITY, 'LISTING_INCOMPLETE', 'Thiếu ảnh.', {
+      missing: ['PHOTO_BEDROOM', 'PHOTO_LIVING'],
+    });
+    expect(ex.getResponse()).toEqual({
+      missing: ['PHOTO_BEDROOM', 'PHOTO_LIVING'],
+      statusCode: 422,
+      message: 'Thiếu ảnh.',
+      error: 'Unprocessable Entity',
+      code: 'LISTING_INCOMPLETE',
+    });
+  });
+
+  it('extra không ghi đè được statusCode, message, error, code', () => {
+    const ex = coded(HttpStatus.CONFLICT, 'HOUSE_FULL', 'Nhà đã đủ người.', {
+      statusCode: 200,
+      message: 'giả',
+      error: 'giả',
+      code: 'GIA',
+      other: 1,
+    });
+    expect(ex.getResponse()).toEqual({
+      other: 1,
+      statusCode: 409,
+      message: 'Nhà đã đủ người.',
+      error: 'Conflict',
+      code: 'HOUSE_FULL',
+    });
+  });
+
+  it('extra rỗng cho body y như khi không truyền', () => {
+    expect(coded(HttpStatus.CONFLICT, 'X', 'm', {}).getResponse()).toEqual(
+      coded(HttpStatus.CONFLICT, 'X', 'm').getResponse(),
+    );
+  });
+
   it('tên lỗi theo mã HTTP khác', () => {
     expect(coded(HttpStatus.UNPROCESSABLE_ENTITY, 'WEEK_OUT_OF_RANGE', 'x').getResponse()).toMatchObject({
       error: 'Unprocessable Entity',
