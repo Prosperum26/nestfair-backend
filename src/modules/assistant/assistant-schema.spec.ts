@@ -98,6 +98,13 @@ describe('assistantResponseSchema và prompt', () => {
     expect(Object.keys(payload?.properties ?? {})).toEqual(['title', 'remindAt', 'estimatedAmount']);
   });
 
+  it('payload bắt buộc đủ 3 trường (nullable) để model không bỏ trống remindAt của CREATE_REMINDER', () => {
+    const payload = assistantResponseSchema.properties?.suggestedActions?.items?.properties?.payload;
+    expect(payload?.required).toEqual(['title', 'remindAt', 'estimatedAmount']);
+    expect(payload?.properties?.remindAt?.nullable).toBe(true);
+    expect(payload?.properties?.estimatedAmount?.nullable).toBe(true);
+  });
+
   it('prompt đủ 5 nguyên tắc: anh/chị đi trước, giải pháp rẻ ở Bách Hóa Xanh, trung lập không phán xét, không chẩn đoán y tế + hỗ trợ chuyên môn khi khủng hoảng, từ chối ngoài chủ đề trọ', () => {
     expect(ASSISTANT_SYSTEM_PROMPT).toContain('người anh/chị đi trước');
     expect(ASSISTANT_SYSTEM_PROMPT).toContain('Bách Hóa Xanh');
