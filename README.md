@@ -115,7 +115,7 @@ Hai khoản chi ("Đi chợ cuối tuần", "Nước rửa chén & giấy") có 
 
 ### Bật upload ảnh (Cloudinary)
 
-Check-in việc nhà, ảnh hóa đơn và bill chuyển khoản cần ảnh. Điền `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` vào `.env` (lấy ở Cloudinary Dashboard). Chưa điền thì `POST /assignments/:id/checkin` trả `503`.
+Check-in việc nhà, ảnh hóa đơn và bill chuyển khoản cần ảnh. Điền `CLOUDINARY_URL=cloudinary://<api_key>:<api_secret>@<cloud_name>` vào `.env` (Cloudinary Dashboard → API Keys → "API Environment variable"), hoặc 3 biến tách rời `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` (ưu tiên hơn URL nếu có cả hai). Chưa điền thì `POST /assignments/:id/checkin` trả `503`.
 
 ## Việc nhà (Issue #4 v2)
 

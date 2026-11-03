@@ -51,6 +51,11 @@ export class Env {
   @IsString()
   CLOUDINARY_API_SECRET?: string;
 
+  // Cách gọn: cloudinary://<api_key>:<api_secret>@<cloud_name>. 3 biến ở trên (nếu có) được ưu tiên.
+  @IsOptional()
+  @IsString()
+  CLOUDINARY_URL?: string;
+
   // Gemini (OCR hóa đơn): để trống key = tắt OCR, quét trả về nhập tay. Có key thì bắt buộc khai báo model.
   @IsOptional()
   @IsString()
