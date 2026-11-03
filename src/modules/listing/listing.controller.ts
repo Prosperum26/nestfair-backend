@@ -17,6 +17,7 @@ import {
   ApiBadRequestResponse,
   ApiBearerAuth,
   ApiBody,
+  ApiConflictResponse,
   ApiConsumes,
   ApiCreatedResponse,
   ApiForbiddenResponse,
@@ -40,7 +41,9 @@ import type { UploadedImage } from '../uploads/image-validation.js';
 import { ListingPayloadDto, ListingPhotoDto } from './dto/listing-response.dto.js';
 import { UploadPhotoDto } from './dto/upload-photo.dto.js';
 import { UpsertListingDto } from './dto/upsert-listing.dto.js';
+import { ListingStatusDto } from './dto/listing-status.dto.js';
 import { ListingPhotosService } from './listing-photos.service.js';
+import { ListingStatusService } from './listing-status.service.js';
 import { ListingService } from './listing.service.js';
 
 /** Multer chặn cứng ở 10MB; validateImageFile trả lỗi 413 thân thiện ở mốc 5MB. */
@@ -58,6 +61,7 @@ export class ListingController {
   constructor(
     private readonly listing: ListingService,
     private readonly photos: ListingPhotosService,
+    private readonly status: ListingStatusService,
   ) {}
 
   @Get()
@@ -81,6 +85,26 @@ export class ListingController {
     @Body() dto: UpsertListingDto,
   ): Promise<ListingPayloadDto> {
     return this.listing.upsert(m.houseId, user.id, dto);
+  }
+
+  @Patch('status')
+  @HouseRoles('ADMIN')
+  @UseGuards(HouseRolesGuard)
+  @ApiOperation({
+    summary: 'Trưởng phòng đăng (OPEN), tạm ẩn (DRAFT), đóng (CLOSED) hoặc mở lại tin. Đóng tay phát `listing:closed`.',
+  })
+  @ApiOkResponse({ type: ListingPayloadDto })
+  @ApiBadRequestResponse({ description: 'status không hợp lệ' })
+  @ApiNotFoundResponse({ description: 'LISTING_NOT_FOUND: nhà chưa có tin' })
+  @ApiConflictResponse({ description: 'HOUSE_FULL: đăng hoặc mở lại khi nhà đã đủ người' })
+  @ApiUnprocessableEntityResponse({
+    description: 'LISTING_INCOMPLETE (kèm missing) | LISTING_STATUS_INVALID (CLOSED → DRAFT)',
+  })
+  setStatus(
+    @CurrentMembership() m: HouseMembership,
+    @Body() dto: ListingStatusDto,
+  ): Promise<ListingPayloadDto> {
+    return this.status.setStatus(m.houseId, m, dto.status);
   }
 
   @Post('photos')

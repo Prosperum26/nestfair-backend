@@ -13,7 +13,9 @@ export type ChoreEvent =
 export type ExpenseEvent = 'expense:new' | 'expense:updated' | 'expense:deleted';
 /** Tất toán: `debt:settled` theo đặc tả (chủ nợ xác nhận); báo chuyển / hủy để client tải lại. */
 export type SettlementEvent = 'settlement:requested' | 'settlement:cancelled' | 'debt:settled';
-export type RealtimeEvent = ChoreEvent | ExpenseEvent | SettlementEvent | 'reminder:due';
+/** Tin tìm người ở ghép: `listing:closed` khi tin đóng (đủ người hoặc trưởng phòng đóng tay). */
+export type ListingEvent = 'listing:closed';
+export type RealtimeEvent = ChoreEvent | ExpenseEvent | SettlementEvent | ListingEvent | 'reminder:due';
 
 export const houseRoom = (houseId: string) => `house:${houseId}`;
 export const userRoom = (userId: string) => `user:${userId}`;

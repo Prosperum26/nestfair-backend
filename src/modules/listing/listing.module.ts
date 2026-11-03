@@ -4,6 +4,7 @@ import { HousesModule } from '../houses/houses.module.js';
 import { UploadsModule } from '../uploads/uploads.module.js';
 import { ListingController } from './listing.controller.js';
 import { ListingPhotosService } from './listing-photos.service.js';
+import { ListingStatusService } from './listing-status.service.js';
 import { ListingService } from './listing.service.js';
 import { ListingSummaryService } from './listing-summary.service.js';
 
@@ -11,7 +12,7 @@ import { ListingSummaryService } from './listing-summary.service.js';
 @Module({
   imports: [AuthModule, HousesModule, UploadsModule],
   controllers: [ListingController],
-  providers: [ListingService, ListingSummaryService, ListingPhotosService],
+  providers: [ListingService, ListingSummaryService, ListingPhotosService, ListingStatusService],
   exports: [ListingSummaryService],
 })
 export class ListingModule {}
