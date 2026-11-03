@@ -619,6 +619,8 @@ model Expense {
   spentAt         DateTime
   note            String?
   receiptImageUrl String?
+  /// Danh sách món của hóa đơn (tùy chọn): [{ name, lineTotal, userIds }]; userIds rỗng nếu không chia theo món.
+  items           Json?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
