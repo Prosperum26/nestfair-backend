@@ -10,6 +10,7 @@ import { ChoresModule } from './modules/chores/chores.module.js';
 import { EventsModule } from './modules/events/events.module.js';
 import { ExpensesModule } from './modules/expenses/expenses.module.js';
 import { HousesModule } from './modules/houses/houses.module.js';
+import { ListingModule } from './modules/listing/listing.module.js';
 import { SchedulerModule } from './modules/scheduler/scheduler.module.js';
 import { SettlementsModule } from './modules/settlements/settlements.module.js';
 import { UsersModule } from './modules/users/users.module.js';
@@ -25,6 +26,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     ChoresModule,
     ExpensesModule,
     SettlementsModule,
+    ListingModule,
     EventsModule,
     ScheduleModule.forRoot(),
     // Giới hạn tần suất cho check-in / duyệt / khiếu nại (ThrottlerGuard gắn riêng trên các route đó). Bỏ qua khi test.

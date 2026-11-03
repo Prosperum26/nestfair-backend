@@ -43,6 +43,8 @@ export async function createFixture(
     get: (path: string) => http().get(path).set('Authorization', `Bearer ${token}`),
     post: (path: string, body?: object) =>
       http().post(path).set('Authorization', `Bearer ${token}`).send(body),
+    put: (path: string, body?: object) =>
+      http().put(path).set('Authorization', `Bearer ${token}`).send(body),
     patch: (path: string, body?: object) =>
       http().patch(path).set('Authorization', `Bearer ${token}`).send(body),
     delete: (path: string) => http().delete(path).set('Authorization', `Bearer ${token}`),
