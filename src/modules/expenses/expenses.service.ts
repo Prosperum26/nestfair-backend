@@ -8,7 +8,7 @@ import type { HouseMembership } from '../houses/guards/house-member.guard.js';
 import { CloudinaryService, publicIdFromUrl } from '../uploads/cloudinary.service.js';
 import { type UploadedImage, validateImageFile } from '../uploads/image-validation.js';
 import { computeSplit, type SplitShare } from './algorithms/split.js';
-import type { CreateExpenseDto, ExactSplitDto } from './dto/create-expense.dto.js';
+import type { CreateExpenseDto, ExactSplitDto, ItemizedItemDto } from './dto/create-expense.dto.js';
 import type { ExpenseDto, ExpenseSummaryDto, UploadedUrlDto } from './dto/expense-response.dto.js';
 import type { ListExpensesQuery } from './dto/list-expenses.query.js';
 import type { UpdateExpenseDto } from './dto/update-expense.dto.js';
@@ -25,6 +25,7 @@ type ExpenseRow = Prisma.ExpenseGetPayload<{ include: typeof EXPENSE_INCLUDE }>;
 const FUTURE_TOLERANCE_MS = 24 * 60 * 60 * 1000;
 
 const splitInvalid = (message: string) => coded(HttpStatus.UNPROCESSABLE_ENTITY, 'SPLIT_INVALID', message);
+const scanUsed = () => coded(HttpStatus.CONFLICT, 'RECEIPT_SCAN_USED', 'Hóa đơn này đã được ghi vào sổ rồi.');
 
 /** Đầu vào phần chia sau khi gộp DTO với khoản chi cũ (khi sửa). */
 interface SplitRequest {
@@ -32,6 +33,7 @@ interface SplitRequest {
   total: number;
   participantIds?: readonly string[];
   splits?: readonly ExactSplitDto[];
+  items?: readonly ItemizedItemDto[];
 }
 
 @Injectable()
@@ -109,27 +111,41 @@ export class ExpensesService {
     const payerId = dto.payerId ?? m.userId;
     this.assertAllowed([payerId], active, 'Người trả phải là thành viên của nhà.');
     const shares = this.split(
-      { splitType: dto.splitType, total: dto.totalAmount, participantIds: dto.participantIds, splits: dto.splits },
+      { splitType: dto.splitType, total: dto.totalAmount, participantIds: dto.participantIds, splits: dto.splits, items: dto.items },
       active,
       new Set(active),
     );
     if (dto.receiptImageUrl) this.assertReceiptUrl(m.houseId, dto.receiptImageUrl);
+    // Bản nháp OCR: kiểm tra trước để trả 404/409 sớm; việc đánh dấu USED nằm trong transaction bên dưới.
+    const scan = dto.receiptScanId ? await this.loadScan(m.houseId, dto.receiptScanId) : null;
 
-    const created = await this.prisma.expense.create({
-      data: {
-        houseId: m.houseId,
-        payerId,
-        createdById: m.userId,
-        title: dto.title,
-        category: dto.category,
-        totalAmount: dto.totalAmount,
-        splitType: dto.splitType,
-        spentAt: this.spentAt(dto.spentAt, now),
-        note: dto.note || null,
-        receiptImageUrl: dto.receiptImageUrl ?? null,
-        splits: { create: shares.map((s) => ({ userId: s.userId, allocatedAmount: s.amount })) },
-      },
-      include: EXPENSE_INCLUDE,
+    const created = await this.prisma.$transaction(async (tx) => {
+      const expense = await tx.expense.create({
+        data: {
+          houseId: m.houseId,
+          payerId,
+          createdById: m.userId,
+          title: dto.title,
+          category: dto.category,
+          totalAmount: dto.totalAmount,
+          splitType: dto.splitType,
+          spentAt: this.spentAt(dto.spentAt, now),
+          note: dto.note || null,
+          // Không gửi ảnh thì lấy ảnh của bản nháp OCR; gửi null tường minh thì không gắn ảnh.
+          receiptImageUrl: dto.receiptImageUrl === undefined ? (scan?.imageUrl ?? null) : dto.receiptImageUrl,
+          splits: { create: shares.map((s) => ({ userId: s.userId, allocatedAmount: s.amount })) },
+        },
+        include: EXPENSE_INCLUDE,
+      });
+      if (scan) {
+        // Chỉ một request thắng: request thứ hai chờ khóa dòng, thấy status đã USED, count = 0 và hủy cả transaction.
+        const linked = await tx.receiptScan.updateMany({
+          where: { id: scan.id, status: { not: 'USED' } },
+          data: { status: 'USED', expenseId: expense.id },
+        });
+        if (linked.count !== 1) throw scanUsed();
+      }
+      return expense;
     });
 
     this.events.emitToHouse(m.houseId, 'expense:new', {
@@ -137,7 +153,7 @@ export class ExpensesService {
       title: created.title,
       payer: { id: created.payer.id, fullName: created.payer.fullName },
       amount: created.totalAmount,
-      fromReceipt: false,
+      fromReceipt: scan !== null,
     });
     return this.toDto(created, m);
   }
@@ -155,7 +171,11 @@ export class ExpensesService {
     const total = dto.totalAmount ?? old.totalAmount;
     const splitType = dto.splitType ?? old.splitType;
     const resplit =
-      dto.totalAmount !== undefined || dto.splitType !== undefined || dto.participantIds !== undefined || dto.splits !== undefined;
+      dto.totalAmount !== undefined ||
+      dto.splitType !== undefined ||
+      dto.participantIds !== undefined ||
+      dto.splits !== undefined ||
+      dto.items !== undefined;
     let shares: SplitShare[] | undefined;
     if (resplit) {
       const sameType = splitType === old.splitType;
@@ -163,6 +183,7 @@ export class ExpensesService {
         {
           splitType,
           total,
+          items: dto.items,
           participantIds: dto.participantIds ?? (sameType && splitType === 'CUSTOM' ? old.splits.map((s) => s.userId) : undefined),
           splits:
             dto.splits ??
@@ -218,6 +239,14 @@ export class ExpensesService {
     return { url };
   }
 
+  /** Bản nháp OCR của đúng nhà này và chưa dùng; sai nhà cũng báo 404 để không lộ bản nháp của nhà khác. */
+  private async loadScan(houseId: string, id: string) {
+    const scan = await this.prisma.receiptScan.findFirst({ where: { id, houseId } });
+    if (!scan) throw coded(HttpStatus.NOT_FOUND, 'RECEIPT_SCAN_NOT_FOUND', 'Không tìm thấy bản nháp hóa đơn này.');
+    if (scan.status === 'USED') throw scanUsed();
+    return scan;
+  }
+
   private async load(houseId: string, id: string): Promise<ExpenseRow> {
     const row = await this.prisma.expense.findFirst({ where: { id, houseId }, include: EXPENSE_INCLUDE });
     if (!row) throw coded(HttpStatus.NOT_FOUND, 'EXPENSE_NOT_FOUND', 'Không tìm thấy khoản chi.');
@@ -241,7 +270,7 @@ export class ExpensesService {
 
   /**
    * EQUAL chia cho mọi thành viên đang ở; CUSTOM chia đều cho người được chọn (sắp theo thứ tự vào nhà);
-   * EXACT lấy số tiền từng người. Phần 0đ không lưu.
+   * EXACT lấy số tiền từng người; ITEMIZED chia theo từng món (phần chênh chia theo tỷ lệ). Phần 0đ không lưu.
    */
   private split(req: SplitRequest, active: readonly string[], allowed: ReadonlySet<string>): SplitShare[] {
     if (req.splitType !== 'CUSTOM' && req.participantIds !== undefined) {
@@ -249,6 +278,9 @@ export class ExpensesService {
     }
     if (req.splitType !== 'EXACT' && req.splits !== undefined) {
       throw splitInvalid('Chỉ kiểu "Chính xác" mới nhận số tiền từng người.');
+    }
+    if (req.splitType !== 'ITEMIZED' && req.items !== undefined) {
+      throw splitInvalid('Chỉ kiểu "Theo món" mới nhận danh sách món.');
     }
 
     let shares: SplitShare[];
@@ -273,7 +305,9 @@ export class ExpensesService {
         shares = computeSplit({ type: 'EXACT', total: req.total, amounts: req.splits });
         break;
       case 'ITEMIZED':
-        shares = computeSplit({ type: 'ITEMIZED', total: req.total });
+        if (!req.items?.length) throw splitInvalid('Nhập danh sách món để chia theo món.');
+        this.assertAllowed(req.items.flatMap((i) => i.userIds), allowed, 'Người dùng món phải là thành viên của nhà.');
+        shares = computeSplit({ type: 'ITEMIZED', total: req.total, items: req.items, order: active });
         break;
     }
     return shares.filter((s) => s.amount > 0);

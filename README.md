@@ -98,6 +98,7 @@ Mật khẩu chung: `NestFair123`. Mã mời Nhà 12A: `K7M2QZ` (seed đặt l�
 
 Sổ chi: tháng 10.2026 có 6 hóa đơn, tổng 2.280.000đ (khớp ảnh thiết kế 07). Tháng 9 đã tất toán hết. Thiện đang báo chuyển 380.000đ cho Mai (chờ Mai xác nhận).
 Kế hoạch rút gọn: Thiện → Mai 380.000đ, Hùng → Quân 170.000đ.
+Hai khoản chi ("Đi chợ cuối tuần", "Nước rửa chén & giấy") có nguồn từ OCR: mỗi khoản gắn một `ReceiptScan` đã dùng (tổng món bằng tổng khoản chi, không đổi số dư). Không người dùng demo nào đã đồng ý gửi ảnh tới Gemini: lần quét đầu tiên sẽ hiện hộp thoại hỏi.
 
 ## Auth (tóm tắt)
 
@@ -169,7 +170,7 @@ chưa có "Xếp bổ sung" giữa tuần và duyệt khai vắng dài ngày.
 (người chuyển +, người nhận −), tính lại từ dữ liệu gốc mỗi lần (`LedgerService`). Settlement `PENDING` chưa tính.
 
 - **Chia tiền** (`expenses/algorithms/split.ts`): `EQUAL` chia cả nhà, `CUSTOM` chia đều cho người được chọn, `EXACT` nhập từng người (tổng phải khớp).
-  Phần dư cộng lần lượt 1đ từ người vào nhà sớm nhất. `ITEMIZED` có trong enum nhưng chưa hỗ trợ (chờ OCR).
+  Phần dư cộng lần lượt 1đ từ người vào nhà sớm nhất. `ITEMIZED` chia theo từng món (xem mục "Quét hóa đơn").
 - **Min Cash Flow** (`expenses/algorithms/min-cash-flow.ts`): ghép con nợ lớn nhất với chủ nợ lớn nhất, tối đa N−1 giao dịch, kết quả xác định.
   Ném lỗi nếu tổng số dư khác 0 thay vì âm thầm làm mất tiền.
 - **Báo chuyển / xác nhận:** người nợ tạo `PENDING` (không vượt số còn nợ và số người nhận còn được nhận), người nhận xác nhận → `CONFIRMED`.
@@ -181,7 +182,8 @@ chưa có "Xếp bổ sung" giữa tuần và duyệt khai vắng dài ngày.
 | :-- | :-- | :-- |
 | GET | `/expenses?month=2026-10&payerId=&category=&q=` | sổ chi theo tháng (giờ VN), kèm `splits`, `myShare`, `canEdit` |
 | GET | `/expenses/summary?month=` | tổng tháng, bạn đã trả, phần của bạn, `diff`, theo danh mục |
-| POST | `/expenses` | `{ title, category, totalAmount, splitType, payerId?, participantIds? (CUSTOM), splits? (EXACT), spentAt?, note?, receiptImageUrl? }` |
+| POST | `/expenses` | `{ title, category, totalAmount, splitType, payerId?, participantIds? (CUSTOM), splits? (EXACT), items? (ITEMIZED), receiptScanId?, spentAt?, note?, receiptImageUrl? }` |
+| POST | `/expenses/scan` | multipart `photo` → bản nháp hóa đơn, **không** lưu khoản chi (xem mục "Quét hóa đơn") |
 | GET/PATCH/DELETE | `/expenses/:expenseId` | sửa/xóa: người trả, người ghi hoặc trưởng phòng; đổi tiền / kiểu chia thì chia lại |
 | POST | `/expenses/receipt-image` | multipart `photo` → `{ url }` |
 | GET | `/settlements/plan` | `members` (kèm `net`), `raw` (nợ chéo, sơ đồ "Trước"), `optimized` (kèm `pending`), `rawTotal`, `optimizedTotal` |
@@ -192,7 +194,7 @@ chưa có "Xếp bổ sung" giữa tuần và duyệt khai vắng dài ngày.
 | PATCH | `/settlements/:settlementId/confirm` | chỉ người nhận |
 | PATCH | `/settlements/:settlementId/cancel` | người chuyển hoặc người nhận |
 
-**Lỗi** (`code`): `SPLIT_INVALID`, `SPLIT_SUM_MISMATCH`, `SPLIT_TYPE_NOT_SUPPORTED`, `NOT_A_HOUSE_MEMBER`, `SPENT_AT_IN_FUTURE`, `RECEIPT_URL_INVALID`,
+**Lỗi** (`code`): `SPLIT_INVALID`, `SPLIT_SUM_MISMATCH`, `RECEIPT_SCAN_NOT_FOUND`, `RECEIPT_SCAN_USED` (409), `NOT_A_HOUSE_MEMBER`, `SPENT_AT_IN_FUTURE`, `RECEIPT_URL_INVALID`,
 `EXPENSE_NOT_FOUND`, `EXPENSE_FORBIDDEN`, `MEMBER_NOT_FOUND`, `PAYMENT_INFO_MISSING`, `SETTLEMENT_SELF`, `SETTLEMENT_AMOUNT_EXCEEDS_DEBT`,
 `SETTLEMENT_ALREADY_PENDING` (409), `SETTLEMENT_NOT_PENDING` (409), `SETTLEMENT_NOT_FOUND`, `NOT_SETTLEMENT_RECEIVER`, `NOT_SETTLEMENT_PARTY`, `PROOF_URL_INVALID`.
 
@@ -201,3 +203,40 @@ chưa có "Xếp bổ sung" giữa tuần và duyệt khai vắng dài ngày.
 
 **Giới hạn đã biết.** Ảnh tải lên nhưng không gắn vào khoản chi / báo chuyển nào thì chưa có job dọn. Chưa chặn rời nhà khi số dư ≠ 0
 (`LedgerService.netBalances` đã sẵn để issue nhà dùng). Greedy bảo đảm ≤ N−1 giao dịch, không bảo đảm ít nhất tuyệt đối.
+
+## Quét hóa đơn OCR (Issue #11)
+
+Chụp hóa đơn → Gemini Vision → **bản nháp** → người dùng sửa và gán món → lưu khoản chi `ITEMIZED`. AI không bao giờ tự ghi dữ liệu:
+`POST /expenses/scan` chỉ tạo `ReceiptScan`, khoản chi chỉ có khi client gọi `POST /expenses` kèm `receiptScanId`.
+
+**Bật.** Đặt `GEMINI_API_KEY` và `GEMINI_MODEL` trong `.env` (model không hardcode; bắt buộc có khi có key; ví dụ `gemini-3.5-flash-lite`). Để trống key = OCR tắt,
+mọi lần quét trả về nhập tay. Cần thêm Cloudinary (ảnh được tải lên trước khi đọc).
+
+**Quyền riêng tư.** Ảnh hóa đơn được gửi tới Google Gemini. Mỗi người tự đồng ý: `PATCH /users/me/ocr-consent { enabled }` đặt `User.ocrConsentAt`
+(null = chưa đồng ý, hiện trong `/users/me`). Chưa đồng ý thì quét trả `403 OCR_CONSENT_REQUIRED`, kiểm tra trước cả upload và hạn mức. Đồng ý theo người, không theo nhà,
+và tắt được bất cứ lúc nào. Điều khoản của gói free của Gemini có thể cho Google dùng dữ liệu để cải thiện sản phẩm: cần đọc lại điều khoản hiện hành trước khi dùng cho ảnh có thông tin cá nhân.
+
+**`POST /houses/:houseId/expenses/scan`** (multipart `photo`, jpeg/png/webp ≤ 5MB; client nén ≤ 1MB, cạnh dài ≤ 1600px). Trả `201`:
+
+```ts
+{ scanId, imageUrl, latencyMs,
+  mode: 'DRAFT' | 'MANUAL', reason: 'NOT_A_RECEIPT' | 'UNREADABLE' | 'AI_TIMEOUT' | 'AI_UNAVAILABLE' | null, message: string | null,
+  draft: { merchant, purchasedAt /* YYYY-MM-DD | null */, total,
+           items: [{ name, quantity, lineTotal, uncertain, note }],
+           warnings: [{ code: 'ITEMS_TOTAL_MISMATCH' | 'DATE_MISSING' | 'DATE_IN_FUTURE' | 'DROPPED_ITEMS' | 'AI_NOTE', message }] } | null }
+```
+
+- **Không đọc được thì vẫn `201` với `mode: 'MANUAL'`** (ảnh mờ, không phải hóa đơn, tổng ≤ 0, Gemini lỗi hoặc quá 10 giây): ảnh đã tải lên vẫn dùng được để mở form nhập tay.
+- **Hậu kiểm** (`receipts/receipt-sanity.ts`): `items` rỗng → `NOT_A_RECEIPT`; tổng ≤ 0, không nguyên hoặc > 1 tỷ → `UNREADABLE`; `|Σ món − tổng| / tổng > 2%` → cảnh báo `ITEMS_TOTAL_MISMATCH`;
+  dòng giảm giá âm / 0đ bị loại kèm cảnh báo; chuỗi do AI trả về bị cắt độ dài và bỏ ký tự điều khiển. Không tách VAT, chỉ lấy tổng thực trả.
+- **Hạn mức** 20 lượt quét / nhà / ngày (giờ VN, kể cả lượt lỗi); quá hạn mức `429 OCR_QUOTA_EXCEEDED` mà không upload hay gọi Gemini.
+  Hai request song song ở mốc 19→20 có thể vượt 1 lượt.
+- Mỗi lần quét lưu `ReceiptScan` (JSON gốc của AI, model, độ trễ) để debug và đánh giá độ chính xác trong báo cáo. Engine đọc ảnh nằm sau token `RECEIPT_EXTRACTOR`.
+
+**Chia theo món** (`POST /expenses`, `splitType: 'ITEMIZED'`, `items: [{ name, lineTotal, userIds }]`, tối đa 100 món): mỗi món chia đều cho những người dùng nó;
+phần chênh giữa `totalAmount` và tổng các món (giảm giá, phí) được chia **theo tỷ lệ tiền món của từng người**, dùng BigInt vì tích có thể vượt 2^53;
+phần dư chia 1đ từ người vào nhà sớm nhất, nên Σ phần chia luôn bằng `totalAmount`. Ví dụ: tổng 100.000đ, món 60.000đ (a, b, c) và món 50.000đ (a) → a 63.636đ, b 18.182đ, c 18.182đ.
+Gửi `receiptScanId` để gắn bản nháp: kiểm tra cùng nhà và chưa dùng, đánh dấu `USED` trong cùng transaction nên bấm lưu đúp chỉ ra một khoản chi (`409 RECEIPT_SCAN_USED`);
+scan của nhà khác hoặc không có thì `404`. Khoản `ITEMIZED` không lưu danh sách món: sửa tiền hoặc kiểu chia phải gửi lại `items`. `PATCH` không nhận `receiptScanId`.
+
+**Giới hạn đã biết.** Refresh trang xác nhận thì mất bản nháp phía client (chưa có API đọc lại); ảnh của scan không được dùng chưa có job dọn.

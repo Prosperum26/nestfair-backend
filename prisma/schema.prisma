@@ -2,6 +2,7 @@
 // Issue #3: User, RefreshToken, House, HouseMember.
 // Issue chores: Chore, ChoreAssignment.
 // Issue #9: Expense, ExpenseSplit, Settlement.
+// Issue #11: ReceiptScan (OCR hóa đơn), User.ocrConsentAt.
 
 generator client {
   provider            = "prisma-client"
@@ -15,19 +16,21 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(uuid()) @db.Uuid
-  email        String   @unique
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique
   /// Null khi tài khoản chỉ đăng nhập bằng Google.
   passwordHash String?
-  googleId     String?  @unique
+  googleId     String?   @unique
   fullName     String
   phone        String?
   /// Mã BIN 6 số của ngân hàng (Napas), dùng cho VietQR.
   bankBin      String?
   bankAccount  String?
   avatarUrl    String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  /// Lúc người dùng đồng ý gửi ảnh hóa đơn tới Google Gemini. Null = chưa đồng ý (chặn quét OCR).
+  ocrConsentAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   refreshTokens RefreshToken[]
   memberships   HouseMember[]
@@ -38,6 +41,7 @@ model User {
   expenseSplits       ExpenseSplit[]
   settlementsSent     Settlement[]   @relation("SettlementFrom")
   settlementsReceived Settlement[]   @relation("SettlementTo")
+  receiptScans        ReceiptScan[]
 
   @@map("users")
 }
@@ -92,6 +96,7 @@ model House {
   auditLogs     ChoreAuditLog[]
   expenses      Expense[]
   settlements   Settlement[]
+  receiptScans  ReceiptScan[]
 
   @@map("houses")
 }
@@ -379,10 +384,11 @@ model Expense {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
-  house     House          @relation(fields: [houseId], references: [id], onDelete: Cascade)
-  payer     User           @relation("ExpensePayer", fields: [payerId], references: [id], onDelete: Restrict)
-  createdBy User           @relation("ExpenseCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  splits    ExpenseSplit[]
+  house       House          @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  payer       User           @relation("ExpensePayer", fields: [payerId], references: [id], onDelete: Restrict)
+  createdBy   User           @relation("ExpenseCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  splits      ExpenseSplit[]
+  receiptScan ReceiptScan?
 
   @@index([houseId, spentAt])
   @@index([payerId])
@@ -427,4 +433,39 @@ model Settlement {
   @@index([houseId, status])
   @@index([houseId, createdAt])
   @@map("settlements")
+}
+
+enum ReceiptScanStatus {
+  /// Có bản nháp để người dùng xác nhận.
+  DRAFT
+  /// Gemini lỗi / ảnh không đọc được: chuyển sang nhập tay.
+  FAILED
+  /// Đã gắn vào một khoản chi.
+  USED
+}
+
+/// Một lần quét hóa đơn. Chỉ là bản nháp: không bao giờ tự tạo Expense (AI không tự ghi dữ liệu).
+/// Mỗi dòng cũng là một lần gọi Gemini nên đếm hạn mức 20 lượt / nhà / ngày bằng cách đếm dòng theo ngày giờ VN.
+model ReceiptScan {
+  id            String            @id @default(uuid()) @db.Uuid
+  houseId       String            @db.Uuid
+  scannedById   String            @db.Uuid
+  imageUrl      String
+  status        ReceiptScanStatus
+  /// NOT_A_RECEIPT | UNREADABLE | AI_TIMEOUT | AI_UNAVAILABLE khi status = FAILED.
+  failureReason String?
+  /// JSON nguyên bản Gemini trả về (debug và đánh giá độ chính xác OCR trong báo cáo).
+  draftJson     Json?
+  model         String?
+  latencyMs     Int?
+  /// Khoản chi được tạo từ bản nháp này (một-một).
+  expenseId     String?           @unique @db.Uuid
+  createdAt     DateTime          @default(now())
+
+  house     House    @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  scannedBy User     @relation(fields: [scannedById], references: [id], onDelete: Restrict)
+  expense   Expense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+
+  @@index([houseId, createdAt])
+  @@map("receipt_scans")
 }

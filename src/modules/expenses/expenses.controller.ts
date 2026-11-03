@@ -16,6 +16,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConflictResponse,
   ApiConsumes,
   ApiCreatedResponse,
   ApiForbiddenResponse,
@@ -42,7 +43,7 @@ import { ExpensesService } from './expenses.service.js';
 const HARD_LIMIT_BYTES = 10 * 1024 * 1024;
 
 const SPLIT_ERRORS =
-  'SPLIT_INVALID | SPLIT_SUM_MISMATCH | SPLIT_TYPE_NOT_SUPPORTED | NOT_A_HOUSE_MEMBER | SPENT_AT_IN_FUTURE | RECEIPT_URL_INVALID';
+  'SPLIT_INVALID | SPLIT_SUM_MISMATCH | NOT_A_HOUSE_MEMBER | SPENT_AT_IN_FUTURE | RECEIPT_URL_INVALID';
 
 @ApiTags('expenses')
 @ApiBearerAuth()
@@ -70,9 +71,11 @@ export class ExpensesController {
   }
 
   @Post()
-  @ApiOperation({ summary: 'Ghi khoản chi và chia tiền (EQUAL / CUSTOM / EXACT). Phát `expense:new`.' })
+  @ApiOperation({ summary: 'Ghi khoản chi và chia tiền (EQUAL / CUSTOM / EXACT / ITEMIZED). Phát `expense:new`.' })
   @ApiCreatedResponse({ type: ExpenseDto })
   @ApiUnprocessableEntityResponse({ description: SPLIT_ERRORS })
+  @ApiNotFoundResponse({ description: 'RECEIPT_SCAN_NOT_FOUND: bản nháp OCR không có hoặc thuộc nhà khác' })
+  @ApiConflictResponse({ description: 'RECEIPT_SCAN_USED: bản nháp OCR đã được dùng cho một khoản chi' })
   create(@CurrentMembership() m: HouseMembership, @Body() dto: CreateExpenseDto): Promise<ExpenseDto> {
     return this.expenses.create(m, dto);
   }
