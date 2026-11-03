@@ -3,11 +3,12 @@ import { coded } from '../../common/coded-exception.js';
 import type { SplitType } from '../../generated/prisma/enums.js';
 
 /** Một món của hóa đơn như lưu trong cột `Expense.items`. `userIds` rỗng nếu khoản không chia theo món. */
-export interface ExpenseItemData {
+// `type` (không phải interface) để gán được cho Prisma.InputJsonValue.
+export type ExpenseItemData = {
   name: string;
   lineTotal: number;
   userIds: string[];
-}
+};
 
 interface ItemInput {
   name: string;

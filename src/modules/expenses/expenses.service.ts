@@ -8,7 +8,8 @@ import type { HouseMembership } from '../houses/guards/house-member.guard.js';
 import { CloudinaryService, publicIdFromUrl } from '../uploads/cloudinary.service.js';
 import { type UploadedImage, validateImageFile } from '../uploads/image-validation.js';
 import { computeSplit, type SplitShare } from './algorithms/split.js';
-import type { CreateExpenseDto, ExactSplitDto, ItemizedItemDto } from './dto/create-expense.dto.js';
+import { assertItemizedItems, itemsForStorage, parseStoredItems } from './expense-items.js';
+import type { CreateExpenseDto, ExactSplitDto } from './dto/create-expense.dto.js';
 import type { ExpenseDto, ExpenseSummaryDto, UploadedUrlDto } from './dto/expense-response.dto.js';
 import type { ListExpensesQuery } from './dto/list-expenses.query.js';
 import type { UpdateExpenseDto } from './dto/update-expense.dto.js';
@@ -33,8 +34,12 @@ interface SplitRequest {
   total: number;
   participantIds?: readonly string[];
   splits?: readonly ExactSplitDto[];
-  items?: readonly ItemizedItemDto[];
+  items?: readonly { name: string; lineTotal: number; userIds: string[] }[];
 }
+
+/** Món gửi lên → dạng đầu vào của phần chia theo món (userIds thiếu thì rỗng; ITEMIZED đã kiểm ít nhất một người trước đó). */
+const splitItems = (items: readonly { name: string; lineTotal: number; userIds?: string[] }[] | undefined) =>
+  items?.map((i) => ({ name: i.name, lineTotal: i.lineTotal, userIds: i.userIds ?? [] }));
 
 @Injectable()
 export class ExpensesService {
@@ -110,14 +115,22 @@ export class ExpensesService {
     const active = await this.activeMemberIds(m.houseId);
     const payerId = dto.payerId ?? m.userId;
     this.assertAllowed([payerId], active, 'Người trả phải là thành viên của nhà.');
+    if (dto.splitType === 'ITEMIZED' && dto.items) assertItemizedItems(dto.items);
     const shares = this.split(
-      { splitType: dto.splitType, total: dto.totalAmount, participantIds: dto.participantIds, splits: dto.splits, items: dto.items },
+      {
+        splitType: dto.splitType,
+        total: dto.totalAmount,
+        participantIds: dto.participantIds,
+        splits: dto.splits,
+        items: dto.splitType === 'ITEMIZED' ? splitItems(dto.items) : undefined,
+      },
       active,
       new Set(active),
     );
     if (dto.receiptImageUrl) this.assertReceiptUrl(m.houseId, dto.receiptImageUrl);
     // Bản nháp OCR: kiểm tra trước để trả 404/409 sớm; việc đánh dấu USED nằm trong transaction bên dưới.
     const scan = dto.receiptScanId ? await this.loadScan(m.houseId, dto.receiptScanId) : null;
+    const storedItems = itemsForStorage(dto.items, dto.splitType);
 
     const created = await this.prisma.$transaction(async (tx) => {
       const expense = await tx.expense.create({
@@ -133,6 +146,7 @@ export class ExpensesService {
           note: dto.note || null,
           // Không gửi ảnh thì lấy ảnh của bản nháp OCR; gửi null tường minh thì không gắn ảnh.
           receiptImageUrl: dto.receiptImageUrl === undefined ? (scan?.imageUrl ?? null) : dto.receiptImageUrl,
+          items: storedItems.length ? storedItems : undefined,
           splits: { create: shares.map((s) => ({ userId: s.userId, allocatedAmount: s.amount })) },
         },
         include: EXPENSE_INCLUDE,
@@ -183,7 +197,7 @@ export class ExpensesService {
         {
           splitType,
           total,
-          items: dto.items,
+          items: splitItems(dto.items),
           participantIds: dto.participantIds ?? (sameType && splitType === 'CUSTOM' ? old.splits.map((s) => s.userId) : undefined),
           splits:
             dto.splits ??
@@ -279,9 +293,6 @@ export class ExpensesService {
     if (req.splitType !== 'EXACT' && req.splits !== undefined) {
       throw splitInvalid('Chỉ kiểu "Chính xác" mới nhận số tiền từng người.');
     }
-    if (req.splitType !== 'ITEMIZED' && req.items !== undefined) {
-      throw splitInvalid('Chỉ kiểu "Theo món" mới nhận danh sách món.');
-    }
 
     let shares: SplitShare[];
     switch (req.splitType) {
@@ -359,6 +370,7 @@ export class ExpensesService {
       createdAt: e.createdAt,
       updatedAt: e.updatedAt,
       splits: e.splits.map((s) => ({ userId: s.userId, fullName: s.user.fullName, avatarUrl: s.user.avatarUrl, amount: s.allocatedAmount })),
+      items: parseStoredItems(e.items),
       myShare: e.splits.find((s) => s.userId === m.userId)?.allocatedAmount ?? 0,
       canEdit: this.canEdit(e, m),
     };

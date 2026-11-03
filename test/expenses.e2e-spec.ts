@@ -383,12 +383,10 @@ describe('Expenses (e2e)', () => {
       expect(amountsOf(res.body)).toEqual({ [a]: 63_636, [b]: 18_182, [c]: 18_182 });
     });
 
-    it('items thiếu khi ITEMIZED, hoặc gửi items với kiểu chia khác → 422 SPLIT_INVALID', async () => {
+    it('items thiếu khi ITEMIZED → 422 SPLIT_INVALID', async () => {
       const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
-      const ids = users.map((u) => u.id);
-      const post = (body: object) => fx.as(users[0].token).post(url(houseId), { ...base, ...body });
-      expect((await post({ splitType: 'ITEMIZED' }).expect(422)).body.code).toBe('SPLIT_INVALID');
-      expect((await post({ splitType: 'EQUAL', items: [{ name: 'x', lineTotal: 100_000, userIds: ids }] }).expect(422)).body.code).toBe('SPLIT_INVALID');
+      const res = await fx.as(users[0].token).post(url(houseId), { ...base, splitType: 'ITEMIZED' }).expect(422);
+      expect(res.body.code).toBe('SPLIT_INVALID');
     });
 
     it('món gán cho người không thuộc nhà → 422 NOT_A_HOUSE_MEMBER, không tạo khoản chi', async () => {
@@ -418,6 +416,73 @@ describe('Expenses (e2e)', () => {
       await post([{ name: 'x', lineTotal: 1000, userIds: [ids[0], ids[0]] }]).expect(400);
       await post([{ name: '', lineTotal: 1000, userIds: ids }]).expect(400);
       await post(Array.from({ length: 101 }, () => ({ name: 'x', lineTotal: 1000, userIds: ids }))).expect(400);
+    });
+
+    describe('danh sách món lưu để xem lại', () => {
+      it('ITEMIZED lưu items đúng thứ tự; GET chi tiết và danh sách trả y hệt; Σ phần chia vẫn bằng tổng', async () => {
+        const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
+        const ids = users.map((u) => u.id);
+        const res = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+        expect(res.body.items).toEqual(bhxItems(ids));
+        const detail = await fx.as(users[0].token).get(url(houseId, `/${res.body.id}`)).expect(200);
+        expect(detail.body.items).toEqual(bhxItems(ids));
+        const list = await fx.as(users[0].token).get(url(houseId, '?month=2026-10')).expect(200);
+        expect(list.body[0].items).toEqual(bhxItems(ids));
+        const saved = await fx.prisma.expenseSplit.aggregate({ where: { expenseId: res.body.id }, _sum: { allocatedAmount: true } });
+        expect(saved._sum.allocatedAmount).toBe(245_000);
+      });
+
+      it('kiểu chia khác kèm items: lưu tên + tiền với userIds [], bỏ qua userIds gửi lên, phần chia y hệt khi không gửi items', async () => {
+        const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+        const outsider = await fx.user('Người lạ');
+        const items = [
+          { name: 'Rau muống', lineTotal: 15_000, userIds: [outsider.id] },
+          { name: 'Sữa', lineTotal: 64_000 },
+        ];
+        for (const type of ['EQUAL', 'CUSTOM', 'EXACT'] as const) {
+          const extra =
+            type === 'CUSTOM'
+              ? { participantIds: [users[0].id, users[1].id] }
+              : type === 'EXACT'
+                ? { splits: [{ userId: users[0].id, amount: 60_000 }, { userId: users[1].id, amount: 40_000 }] }
+                : {};
+          const body = { ...base, splitType: type, ...extra };
+          const withItems = await fx.as(users[0].token).post(url(houseId), { ...body, items }).expect(201);
+          const without = await fx.as(users[0].token).post(url(houseId), body).expect(201);
+          expect(amountsOf(withItems.body), type).toEqual(amountsOf(without.body));
+          expect(withItems.body.items, type).toEqual([
+            { name: 'Rau muống', lineTotal: 15_000, userIds: [] },
+            { name: 'Sữa', lineTotal: 64_000, userIds: [] },
+          ]);
+        }
+      });
+
+      it('khoản không có items (hoặc cột null như khoản cũ) trả items: []', async () => {
+        const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+        const res = await fx.as(users[0].token).post(url(houseId), base).expect(201);
+        expect(res.body.items).toEqual([]);
+        expect((await fx.prisma.expense.findUniqueOrThrow({ where: { id: res.body.id } })).items).toBeNull();
+        const detail = await fx.as(users[0].token).get(url(houseId, `/${res.body.id}`)).expect(200);
+        expect(detail.body.items).toEqual([]);
+      });
+
+      it('cột items chứa JSON hỏng không làm GET trả 500', async () => {
+        const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+        const res = await fx.as(users[0].token).post(url(houseId), base).expect(201);
+        await fx.prisma.$executeRawUnsafe('UPDATE expenses SET items = $1::jsonb WHERE id = $2::uuid', '{"oops":true}', res.body.id);
+        const detail = await fx.as(users[0].token).get(url(houseId, `/${res.body.id}`)).expect(200);
+        expect(detail.body.items).toEqual([]);
+      });
+
+      it('ITEMIZED có items rỗng hoặc món không người dùng → 400 ITEMS_INVALID, không tạo khoản chi', async () => {
+        const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+        const ids = users.map((u) => u.id);
+        const post = (items: unknown) => fx.as(users[0].token).post(url(houseId), { ...base, splitType: 'ITEMIZED', items });
+        expect((await post([]).expect(400)).body.code).toBe('ITEMS_INVALID');
+        expect((await post([{ name: 'x', lineTotal: 1000, userIds: [] }]).expect(400)).body.code).toBe('ITEMS_INVALID');
+        expect((await post([{ name: 'x', lineTotal: 1000, userIds: ids }, { name: 'y', lineTotal: 1000 }]).expect(400)).body.code).toBe('ITEMS_INVALID');
+        expect(await fx.prisma.expense.count({ where: { houseId } })).toBe(0);
+      });
     });
 
     it('tạo kèm receiptScanId: scan chuyển USED và trỏ tới khoản chi; ảnh lấy từ scan; expense:new có fromReceipt', async () => {

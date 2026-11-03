@@ -52,12 +52,16 @@ export class ItemizedItemDto {
   @Max(MAX_AMOUNT, { message: 'Tiền món quá lớn.' })
   lineTotal: number;
 
-  @ApiProperty({ type: [String], format: 'uuid', description: 'Những người cùng dùng món này (chia đều giữa họ)' })
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Những người cùng dùng món này (chia đều giữa họ). Bắt buộc ít nhất một người khi ITEMIZED; kiểu chia khác bỏ qua và lưu [].',
+  })
+  @IsOptional()
   @IsArray()
-  @ArrayMinSize(1, { message: 'Mỗi món cần ít nhất một người dùng.' })
   @ArrayUnique({ message: 'Danh sách người dùng món bị trùng.' })
   @IsUUID('all', { each: true, message: 'userIds không hợp lệ.' })
-  userIds: string[];
+  userIds?: string[];
 }
 
 export class CreateExpenseDto {
@@ -109,11 +113,10 @@ export class CreateExpenseDto {
   @ApiPropertyOptional({
     type: [ItemizedItemDto],
     description:
-      'Chỉ dùng với ITEMIZED (bắt buộc), tối đa 100 món. Phần chênh giữa totalAmount và tổng các món (giảm giá, phí) được chia theo tỷ lệ tiền món của từng người.',
+      'Danh sách món của hóa đơn, tối đa 100 món, lưu để xem lại với mọi kiểu chia. ITEMIZED bắt buộc có items (mỗi món ít nhất một người) và dùng nó để chia: phần chênh giữa totalAmount và tổng các món (giảm giá, phí) được chia theo tỷ lệ tiền món của từng người.',
   })
   @IsOptional()
   @IsArray()
-  @ArrayMinSize(1, { message: 'Nhập ít nhất một món.' })
   @ArrayMaxSize(100, { message: 'Tối đa 100 món.' })
   @ValidateNested({ each: true })
   @Type(() => ItemizedItemDto)
