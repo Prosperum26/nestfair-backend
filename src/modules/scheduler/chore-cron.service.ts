@@ -4,11 +4,15 @@ import { Cron } from '@nestjs/schedule';
 import type { Env } from '../../config/env.validation.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ActivityService } from '../activity/activity.service.js';
 import { AuditService } from '../chores/audit.service.js';
 import { dateOf } from '../chores/schedule-context.js';
 import { ScheduleService } from '../chores/schedule.service.js';
 import { addDays, currentWeekStart, toDateStr } from '../chores/week.js';
 import { EventsService } from '../events/events.service.js';
+import { PaybackService } from '../swaps/payback.service.js';
+import { ChoreDebtService } from '../swaps/chore-debt.service.js';
+import { SwapLifecycleService } from '../swaps/swap-lifecycle.service.js';
 import { CloudinaryService, publicIdFromUrl } from '../uploads/cloudinary.service.js';
 
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
@@ -43,6 +47,10 @@ export class ChoreCronService implements OnApplicationBootstrap {
     private readonly audit: AuditService,
     private readonly cloudinary: CloudinaryService,
     private readonly config: ConfigService<Env, true>,
+    private readonly activity: ActivityService,
+    private readonly swapLifecycle: SwapLifecycleService,
+    private readonly debts: ChoreDebtService,
+    private readonly payback: PaybackService,
   ) {}
 
   private get isTest() {
@@ -69,16 +77,24 @@ export class ChoreCronService implements OnApplicationBootstrap {
     let created = 0;
     for (const houseId of ids) {
       try {
-        const res = await this.schedule.ensureSchedule(houseId, weekStart, 'CRON', now);
+        const outbox = this.events.outbox();
+        // Một mục ticker cho cả lịch tuần (không phải từng ca), cùng transaction sinh lịch.
+        const res = await this.schedule.ensureSchedule(houseId, weekStart, 'CRON', now, async (tx, s) => {
+          if (s.status === 'EMPTY') return;
+          await this.activity.record(tx, outbox, {
+            houseId,
+            type: 'schedule.generated',
+            actor: null,
+            params: { weekKey: s.weekKey, relaxed: s.relaxed },
+            dedupeKey: `schedule:${s.id}:${s.rerollCount}`,
+          });
+        });
         houses++;
         if (res.created) {
           created++;
-          this.events.emitToHouse(houseId, 'chore:shuffled', {
-            weekKey: res.schedule.weekKey,
-            relaxed: res.schedule.relaxed,
-            reasons: res.schedule.reasons,
-          });
+          outbox.toHouse(houseId, 'chore:shuffled', { weekKey: res.schedule.weekKey, relaxed: res.schedule.relaxed, reasons: res.schedule.reasons });
         }
+        outbox.flush();
       } catch (e) {
         // Một nhà lỗi không được chặn các nhà còn lại.
         this.logger.error(`Tạo lịch ${weekStart} cho nhà ${houseId} thất bại`, e as Error);
@@ -94,22 +110,59 @@ export class ChoreCronService implements OnApplicationBootstrap {
    * Trả số ca được đánh dấu.
    */
   async markMissed(now: Date = new Date(), houseIds?: string[]): Promise<number> {
-    const rows = await this.prisma.$queryRaw<TouchedRow[]>(Prisma.sql`
-      WITH due AS (
+    const outbox = this.events.outbox();
+    const rows = await this.prisma.$transaction(async (tx) => {
+      // Khóa các yêu cầu đổi ca dính tới ca sắp đánh MISSED trước (cùng thứ tự khóa với accept).
+      const candidates = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
         SELECT a.id FROM chore_assignments a JOIN houses h ON h.id = a."houseId"
         WHERE a.status IN ('TODO', 'REJECTED')
           AND a."dueAt" + h."choreGraceHours" * interval '1 hour' < ${now.toISOString()}::timestamp
-          ${this.scope(houseIds)}
-        FOR UPDATE OF a SKIP LOCKED
-      )
-      UPDATE chore_assignments c SET status = 'MISSED', "updatedAt" = (now() AT TIME ZONE 'UTC')
-      FROM due WHERE c.id = due.id
-      RETURNING c.id, c."houseId", c."assigneeId"`);
-    if (rows.length === 0) return 0;
+          ${this.scope(houseIds)}`);
+      await this.swapLifecycle.lockPendingFor(tx, candidates.map((c) => c.id));
+      const touched = await tx.$queryRaw<TouchedRow[]>(Prisma.sql`
+        WITH due AS (
+          SELECT a.id FROM chore_assignments a JOIN houses h ON h.id = a."houseId"
+          WHERE a.status IN ('TODO', 'REJECTED')
+            AND a."dueAt" + h."choreGraceHours" * interval '1 hour' < ${now.toISOString()}::timestamp
+            ${this.scope(houseIds)}
+          FOR UPDATE OF a SKIP LOCKED
+        )
+        UPDATE chore_assignments c SET status = 'MISSED', version = c.version + 1, "updatedAt" = (now() AT TIME ZONE 'UTC')
+        FROM due WHERE c.id = due.id
+        RETURNING c.id, c."houseId", c."assigneeId"`);
+      if (touched.length === 0) return touched;
+      await this.swapLifecycle.cancelPendingForAssignments(tx, outbox, touched.map((r) => r.id), 'SLOT_CHANGED');
+      await this.debts.onAssignmentsMissed(tx, outbox, touched.map((r) => r.id), now);
 
-    const byHouse = new Map<string, string[]>();
-    for (const r of rows) byHouse.set(r.houseId, [...(byHouse.get(r.houseId) ?? []), r.id]);
-    for (const [houseId, assignmentIds] of byHouse) this.events.emitToHouse(houseId, 'chore:missed', { assignmentIds });
+      const byHouse = new Map<string, string[]>();
+      for (const r of touched) byHouse.set(r.houseId, [...(byHouse.get(r.houseId) ?? []), r.id]);
+      for (const [houseId, assignmentIds] of byHouse) outbox.toHouse(houseId, 'chore:missed', { assignmentIds });
+
+      // Ticker: một mục mỗi người ("Quân bỏ 2 ca"), không phải mỗi ca.
+      const detail = await tx.choreAssignment.findMany({
+        where: { id: { in: touched.map((r) => r.id) }, assigneeId: { not: null } },
+        select: { houseId: true, titleSnapshot: true, assignee: { select: { userId: true, user: { select: { fullName: true } } } } },
+        orderBy: { dueAt: 'asc' },
+      });
+      const byPerson = new Map<string, { houseId: string; userId: string; name: string; titles: string[] }>();
+      for (const d of detail) {
+        const key = `${d.houseId}|${d.assignee!.userId}`;
+        const g = byPerson.get(key) ?? { houseId: d.houseId, userId: d.assignee!.userId, name: d.assignee!.user.fullName, titles: [] };
+        g.titles.push(d.titleSnapshot);
+        byPerson.set(key, g);
+      }
+      for (const g of byPerson.values()) {
+        await this.activity.record(tx, outbox, {
+          houseId: g.houseId,
+          type: 'chore.missed',
+          actor: { userId: g.userId, name: g.name },
+          params: { count: g.titles.length, choreTitle: g.titles[0], choreTitles: g.titles },
+        });
+      }
+      return touched;
+    });
+    if (rows.length === 0) return 0;
+    outbox.flush();
     await this.checkMissedStreaks(rows, now);
     return rows.length;
   }
@@ -129,9 +182,23 @@ export class ChoreCronService implements OnApplicationBootstrap {
       const latest = recent[0];
       const already = await this.prisma.choreAuditLog.count({ where: { houseId: r.houseId, action: 'MISSED_STREAK', assignmentId: latest.id } });
       if (already > 0) continue;
-      await this.audit.log(r.houseId, null, 'MISSED_STREAK', { assigneeId: r.assigneeId, streak: MISSED_STREAK }, { assignmentId: latest.id });
-      const admins = await this.prisma.houseMember.findMany({ where: { houseId: r.houseId, role: 'ADMIN', leftAt: null }, select: { userId: true } });
-      for (const a of admins) this.events.emitToUser(a.userId, 'chore:missed', { houseId: r.houseId, assigneeId: r.assigneeId, streak: MISSED_STREAK });
+      const outbox = this.events.outbox();
+      await this.prisma.$transaction(async (tx) => {
+        await this.audit.log(r.houseId, null, 'MISSED_STREAK', { assigneeId: r.assigneeId, streak: MISSED_STREAK }, { assignmentId: latest.id }, tx);
+        const admins = await tx.houseMember.findMany({ where: { houseId: r.houseId, role: 'ADMIN', leftAt: null }, select: { userId: true } });
+        for (const a of admins) outbox.toUser(a.userId, 'chore:missed', { houseId: r.houseId, assigneeId: r.assigneeId, streak: MISSED_STREAK }, { houseId: r.houseId });
+        const who = await tx.houseMember.findUniqueOrThrow({ where: { id: r.assigneeId! }, select: { userId: true, user: { select: { fullName: true } } } });
+        // Chỉ trưởng phòng thấy (không bêu tên trước cả nhà).
+        await this.activity.record(tx, outbox, {
+          houseId: r.houseId,
+          type: 'chore.missed_streak',
+          actor: null,
+          params: { targetUserId: who.userId, targetName: who.user.fullName, streak: MISSED_STREAK },
+          visibility: 'ADMIN_ONLY',
+          dedupeKey: `missed-streak:${latest.id}`,
+        });
+      });
+      outbox.flush();
     }
   }
 
@@ -140,28 +207,34 @@ export class ChoreCronService implements OnApplicationBootstrap {
   /** Ca PENDING_VERIFY quá 48h không ai duyệt → DONE `AUTO_APPROVED` (nhãn "Tự duyệt"). */
   async autoApprove(now: Date = new Date(), houseIds?: string[]): Promise<number> {
     const at = now.toISOString();
-    const rows = await this.prisma.$queryRaw<(TouchedRow & { weekKey: string })[]>(Prisma.sql`
-      WITH due AS (
-        SELECT a.id FROM chore_assignments a
-        WHERE a.status = 'PENDING_VERIFY'
-          AND a."submittedAt" < ${at}::timestamp - ${AUTO_APPROVE_HOURS} * interval '1 hour'
-          ${this.scope(houseIds)}
-        FOR UPDATE OF a SKIP LOCKED
-      )
-      UPDATE chore_assignments c
-      SET status = 'DONE', "verifyMode" = 'AUTO_APPROVED', "verifiedAt" = ${at}::timestamp, "updatedAt" = (now() AT TIME ZONE 'UTC')
-      FROM due WHERE c.id = due.id
-      RETURNING c.id, c."houseId", c."assigneeId", c."weekKey"`);
-    for (const r of rows) {
-      this.events.emitToHouse(r.houseId, 'chore:verified', {
-        assignmentId: r.id,
-        weekKey: r.weekKey,
-        assigneeId: r.assigneeId,
-        status: 'DONE',
-        verifyMode: 'AUTO_APPROVED',
-      });
-      await this.audit.log(r.houseId, null, 'AUTO_APPROVE', { afterHours: AUTO_APPROVE_HOURS }, { assignmentId: r.id });
-    }
+    const outbox = this.events.outbox();
+    const rows = await this.prisma.$transaction(async (tx) => {
+      const touched = await tx.$queryRaw<(TouchedRow & { weekKey: string })[]>(Prisma.sql`
+        WITH due AS (
+          SELECT a.id FROM chore_assignments a
+          WHERE a.status = 'PENDING_VERIFY'
+            AND a."submittedAt" < ${at}::timestamp - ${AUTO_APPROVE_HOURS} * interval '1 hour'
+            ${this.scope(houseIds)}
+          FOR UPDATE OF a SKIP LOCKED
+        )
+        UPDATE chore_assignments c
+        SET status = 'DONE', version = c.version + 1, "verifyMode" = 'AUTO_APPROVED', "verifiedAt" = ${at}::timestamp, "updatedAt" = (now() AT TIME ZONE 'UTC')
+        FROM due WHERE c.id = due.id
+        RETURNING c.id, c."houseId", c."assigneeId", c."weekKey"`);
+      const perHouse = new Map<string, number>();
+      for (const r of touched) {
+        outbox.toHouse(r.houseId, 'chore:verified', { assignmentId: r.id, weekKey: r.weekKey, assigneeId: r.assigneeId, status: 'DONE', verifyMode: 'AUTO_APPROVED' });
+        await this.debts.onAssignmentDone(tx, outbox, r.id, now);
+        await this.audit.log(r.houseId, null, 'AUTO_APPROVE', { afterHours: AUTO_APPROVE_HOURS }, { assignmentId: r.id }, tx);
+        perHouse.set(r.houseId, (perHouse.get(r.houseId) ?? 0) + 1);
+      }
+      // Một mục mỗi nhà cho cả đợt tự duyệt.
+      for (const [houseId, count] of perHouse) {
+        await this.activity.record(tx, outbox, { houseId, type: 'chore.auto_approved', actor: null, params: { count, afterHours: AUTO_APPROVE_HOURS } });
+      }
+      return touched;
+    });
+    outbox.flush();
     return rows.length;
   }
 
@@ -238,14 +311,25 @@ export class ChoreCronService implements OnApplicationBootstrap {
     return this.guarded('autoApprove', () => this.autoApprove());
   }
 
+  /** Nợ ca quá hạn chọn bù thì tự chọn giúp (spec 5.7). */
+  async autoPickPayback(now: Date = new Date(), houseIds?: string[]): Promise<number> {
+    return this.payback.autoPick(now, houseIds);
+  }
+
+  @Cron('*/15 * * * *', { timeZone: TIME_ZONE })
+  cronAutoPickPayback() {
+    return this.guarded('autoPickPayback', () => this.autoPickPayback());
+  }
+
   @Cron('*/10 * * * *', { timeZone: TIME_ZONE })
   cronReassignOrphans() {
     return this.guarded('reassignOrphans', () => this.reassignOrphansAll());
   }
 
   @Cron('0 3 * * *', { timeZone: TIME_ZONE })
-  cronCleanupProofs() {
-    return this.guarded('cleanupProofs', () => this.cleanupProofs());
+  async cronCleanupProofs() {
+    await this.guarded('cleanupProofs', () => this.cleanupProofs());
+    await this.guarded('cleanupActivities', () => this.activity.cleanup());
   }
 
   @Cron('5 0 * * *', { timeZone: TIME_ZONE })

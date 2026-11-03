@@ -12,7 +12,8 @@ import { PrismaClient } from '../src/generated/prisma/client.js';
 import { generateWeek } from '../src/modules/chores/algorithms/schedule-generator.js';
 import { buildGenContext } from '../src/modules/chores/schedule-context.js';
 import { createScheduleRows } from '../src/modules/chores/schedule-store.js';
-import { addDays, currentWeekStart, toDateStr } from '../src/modules/chores/week.js';
+import { addDays, currentWeekStart, toDateStr, weekKeyFromStart, weekStartOf } from '../src/modules/chores/week.js';
+import { buildSlices } from '../src/modules/wheel/algorithms/wheel.js';
 
 const PASSWORD = 'NestFair123';
 const INVITE_CODE = 'K7M2QZ';
@@ -178,6 +179,272 @@ async function seedChores(houseId: string, users: Record<string, { id: string }>
     }
   }
   void hung;
+}
+
+/**
+ * Issue #5: việc hệ thống "Việc đột xuất", 1 vòng quay đã công bố (Thiện quay, Quân trúng, Thiện không tham gia)
+ * kèm ca WHEEL còn TODO, và vài mục Live Ticker. Ghi thẳng bảng (seed không đi qua ActivityService, không phát sự kiện).
+ */
+async function seedRealtime(houseId: string, users: Record<string, { id: string; fullName: string }>) {
+  await prisma.houseActivity.deleteMany({ where: { houseId } });
+  const now = Date.now();
+  const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+  const memberOf = (key: string) =>
+    prisma.houseMember.findFirstOrThrow({ where: { houseId, userId: users[key].id, leftAt: null }, select: { id: true } });
+
+  // Vòng quay đã công bố 40 phút trước.
+  const system = await prisma.chore.create({
+    data: { houseId, title: 'Việc đột xuất', frequency: 'ADHOC', recurrenceDays: [], weight: 1, isSystem: true },
+  });
+  const today = toDateStr(new Date());
+  const weekStart = weekStartOf(today);
+  const quan = await memberOf('quan');
+  const participantIds = [users.hung.id, users.mai.id, users.quan.id];
+  const seed = 771204;
+  const slices = buildSlices(participantIds, seed);
+  const landingIndex = slices.indexOf(users.quan.id);
+  const taskTitle = 'Mua nước bình 20L';
+  const slot = await prisma.choreAssignment.create({
+    data: {
+      houseId,
+      choreId: system.id,
+      assigneeId: quan.id,
+      originalAssigneeId: quan.id,
+      weekKey: weekKeyFromStart(weekStart),
+      weekStart: new Date(`${weekStart}T00:00:00Z`),
+      occurrenceDate: new Date(`${today}T00:00:00Z`),
+      slotIndex: 0,
+      dueAt: new Date(now + 3 * 3_600_000),
+      titleSnapshot: taskTitle,
+      weightSnapshot: 1,
+      source: 'WHEEL',
+      status: 'TODO',
+    },
+  });
+  const spunAt = at(40);
+  await prisma.luckyWheelLog.create({
+    data: {
+      houseId,
+      spunById: users.thien.id,
+      taskTitle,
+      dueAt: slot.dueAt,
+      participantIds,
+      excludedCount: 1,
+      slices,
+      selectedUserId: users.quan.id,
+      assignmentId: slot.id,
+      seed,
+      landingIndex,
+      status: 'REVEALED',
+      spunAt,
+      durationMs: 6000,
+      revealAt: new Date(spunAt.getTime() + 6000),
+    },
+  });
+
+  // Live Ticker: lấy các ca demo của tuần này để câu chữ khớp dữ liệu.
+  const demo = (status: 'PENDING_VERIFY' | 'REJECTED' | 'MISSED') =>
+    prisma.choreAssignment.findFirst({ where: { houseId, status, source: { not: 'WHEEL' } }, orderBy: { dueAt: 'desc' } });
+  const [pending, rejected, missed] = await Promise.all([demo('PENDING_VERIFY'), demo('REJECTED'), demo('MISSED')]);
+  const actor = (key: string) => ({ actorUserId: users[key].id, actorName: users[key].fullName });
+  const rows = [
+    { ...actor('hung'), type: 'schedule.generated', params: { weekKey: weekKeyFromStart(weekStart), relaxed: false }, createdAt: at(60 * 30) },
+    missed && { ...actor('quan'), type: 'chore.missed', params: { count: 1, choreTitle: missed.titleSnapshot, choreTitles: [missed.titleSnapshot] }, createdAt: at(180) },
+    rejected && {
+      ...actor('hung'),
+      type: 'chore.rejected',
+      params: { assignmentId: rejected.id, choreTitle: rejected.titleSnapshot, targetUserId: users.mai.id, targetName: users.mai.fullName },
+      createdAt: at(95),
+    },
+    pending && { ...actor('thien'), type: 'chore.submitted', params: { assignmentId: pending.id, choreTitle: pending.titleSnapshot, selfAttested: false }, createdAt: at(70) },
+    {
+      ...actor('thien'),
+      type: 'wheel.result',
+      params: {
+        taskTitle,
+        participantIds,
+        participantNames: [users.hung.fullName, users.mai.fullName, users.quan.fullName],
+        excludedCount: 1,
+        winnerUserId: users.quan.id,
+        winnerName: users.quan.fullName,
+      },
+      createdAt: new Date(spunAt.getTime() + 6000),
+    },
+  ].filter((r): r is NonNullable<typeof r> => !!r);
+  await prisma.houseActivity.createMany({ data: rows.map((r) => ({ houseId, ...r })) });
+  return rows.length;
+}
+
+/** Xóa dữ liệu đổi ca của nhà demo (khóa trước, vì `swap_locks` không có khóa ngoại tới ca). */
+async function cleanSwaps(houseId: string) {
+  const swapIds = (await prisma.choreSwapRequest.findMany({ where: { houseId }, select: { id: true } })).map((s) => s.id);
+  await prisma.swapLock.deleteMany({ where: { swapRequestId: { in: swapIds } } });
+  await prisma.choreSwapRequest.deleteMany({ where: { houseId } });
+  await prisma.choreDebt.deleteMany({ where: { houseId } });
+  await prisma.rotationSwap.deleteMany({ where: { houseId } });
+}
+
+/**
+ * Issue #7 (đặc tả mục 13.2): Chợ ca kèm quà đang chờ, nợ ca đã tới cửa sổ chọn bù, nợ ca chờ ca gốc xong,
+ * chuỗi yêu cầu đã hết hạn chờ leo thang (có một lần ADD_REWARD), hai slot WHEEL "Thông bồn cầu" cùng ngày,
+ * và một EXCHANGE Hùng ↔ Thiện đang chờ. Dựa vào lịch tuần sau (đã công bố) và tuần này do `seedChores` tạo.
+ * Ghi thẳng bảng, không phát sự kiện. Ca MISSED và PENDING_VERIFY đã có sẵn từ `seedChores`.
+ */
+async function seedSwaps(houseId: string, users: Record<string, { id: string; fullName: string }>) {
+  const now = Date.now();
+  const HOUR = 3_600_000;
+  const memberOf = async (key: string) =>
+    (await prisma.houseMember.findFirstOrThrow({ where: { houseId, userId: users[key].id, leftAt: null }, select: { id: true } })).id;
+  const [hung, thien, mai, quan] = await Promise.all([memberOf('hung'), memberOf('thien'), memberOf('mai'), memberOf('quan')]);
+
+  // Ca còn TODO, hạn còn xa (≥ 25 giờ) để mọi quy tắc "còn kịp" đều thỏa. Ưu tiên tuần sau (đã công bố, cả tuần ở tương lai).
+  const thisWeek = currentWeekStart();
+  const futureTodo = await prisma.choreAssignment.findMany({
+    where: {
+      houseId,
+      status: 'TODO',
+      source: { not: 'WHEEL' },
+      assigneeId: { not: null },
+      dueAt: { gte: new Date(now + 25 * HOUR) },
+      weekStart: { in: [new Date(`${addDays(thisWeek, 7)}T00:00:00Z`), new Date(`${thisWeek}T00:00:00Z`)] },
+    },
+    orderBy: [{ weekStart: 'desc' }, { dueAt: 'asc' }],
+  });
+  const used = new Set<string>();
+  const take = (memberId: string, sameWeekAs?: Date) => {
+    const found = futureTodo.find((a) => a.assigneeId === memberId && !used.has(a.id) && (!sameWeekAs || a.weekStart.getTime() === sameWeekAs.getTime()));
+    if (!found) throw new Error('Seed đổi ca: không đủ ca TODO ở tương lai cho thành viên demo.');
+    used.add(found.id);
+    return found;
+  };
+  const lock = (assignmentId: string, swapRequestId: string) => prisma.swapLock.create({ data: { assignmentId, swapRequestId } });
+  const ids = () => crypto.randomUUID();
+
+  // 1. Chợ ca kèm quà 30.000đ đang chờ (a7): Quân đăng.
+  const a7 = take(quan);
+  const marketId = ids();
+  await prisma.choreSwapRequest.create({
+    data: {
+      id: marketId,
+      houseId,
+      type: 'COVER',
+      requesterMemberId: quan,
+      fromAssignmentId: a7.id,
+      compensation: 'GIFT',
+      rewardNote: 'Bao 1 ly trà sữa',
+      rewardAmount: 30000,
+      reason: 'Tối đó mình có hẹn',
+      expiresAt: new Date(Math.min(now + 20 * HOUR, a7.dueAt.getTime() - 6 * HOUR)),
+      rootRequestId: marketId,
+      fromWeightSnapshot: a7.weightSnapshot,
+      fromVersion: a7.version,
+    },
+  });
+  await lock(a7.id, marketId);
+
+  // 2. Nợ ca OPEN đã tới cửa sổ chọn bù: Mai nợ Quân. Ca gốc (Quân làm hộ Mai) đã DONE.
+  const past = await prisma.choreAssignment.findFirst({
+    where: { houseId, assigneeId: quan, status: 'DONE', source: { not: 'WHEEL' } },
+    orderBy: { dueAt: 'desc' },
+  });
+  if (past) {
+    await prisma.choreAssignment.update({ where: { id: past.id }, data: { source: 'COVER', originalAssigneeId: mai } });
+    await prisma.choreDebt.create({
+      data: {
+        houseId,
+        debtorMemberId: mai,
+        creditorMemberId: quan,
+        swapRequestId: ids(),
+        coverAssignmentId: past.id,
+        weight: past.weightSnapshot,
+        pickOpensAt: new Date(now - 2 * HOUR),
+        pickDeadlineAt: new Date(now + 46 * HOUR),
+      },
+    });
+  }
+
+  // 3. Nợ ca OPEN chờ ca gốc DONE: Hùng nợ Thiện. Ca gốc (Thiện đang làm hộ Hùng) còn TODO.
+  const covering = take(thien);
+  await prisma.choreAssignment.update({ where: { id: covering.id }, data: { source: 'COVER', originalAssigneeId: hung } });
+  await prisma.choreDebt.create({
+    data: { houseId, debtorMemberId: hung, creditorMemberId: thien, swapRequestId: ids(), coverAssignmentId: covering.id, weight: covering.weightSnapshot },
+  });
+
+  // 4. Chuỗi hết hạn chờ leo thang: Mai đăng Chợ ca, hết hạn, thêm quà đăng lại, lại hết hạn. Còn đến dueAt − 1h để chọn.
+  const mine = take(mai);
+  const rootId = ids();
+  const secondId = ids();
+  const expired = (id: string, amount: number, extra: object) => ({
+    id,
+    houseId,
+    type: 'COVER' as const,
+    requesterMemberId: mai,
+    fromAssignmentId: mine.id,
+    compensation: 'GIFT' as const,
+    rewardAmount: amount,
+    status: 'EXPIRED' as const,
+    expiresAt: new Date(now - HOUR),
+    closedAt: new Date(now - HOUR),
+    rootRequestId: rootId,
+    escalationDeadline: new Date(mine.dueAt.getTime() - HOUR),
+    fromWeightSnapshot: mine.weightSnapshot,
+    fromVersion: mine.version,
+    ...extra,
+  });
+  await prisma.choreSwapRequest.create({
+    data: expired(rootId, 20000, { resolution: 'ESCALATED', escalationChoice: 'ADD_REWARD', rewardNote: 'Bao ly cà phê', createIdemKey: `seed-${rootId}` }),
+  });
+  await prisma.choreSwapRequest.create({
+    data: expired(secondId, 40000, { resolution: 'EXPIRED_NO_TAKER', rewardNote: 'Bao ly cà phê và bánh', createIdemKey: `seed-${secondId}` }),
+  });
+
+  // 5. Hai slot WHEEL "Thông bồn cầu" cùng việc, cùng ngày (a9 của Quân, a10 của Hùng), dưới việc hệ thống của vòng quay.
+  const system = await prisma.chore.findFirstOrThrow({ where: { houseId, isSystem: true }, select: { id: true } });
+  const day = addDays(toDateStr(new Date(now)), 2);
+  for (const [slotIndex, assignee] of [[0, quan], [1, hung]] as const) {
+    await prisma.choreAssignment.create({
+      data: {
+        houseId,
+        choreId: system.id,
+        assigneeId: assignee,
+        originalAssigneeId: assignee,
+        weekKey: weekKeyFromStart(weekStartOf(day)),
+        weekStart: new Date(`${weekStartOf(day)}T00:00:00Z`),
+        occurrenceDate: new Date(`${day}T00:00:00Z`),
+        slotIndex,
+        dueAt: new Date(now + 48 * HOUR),
+        titleSnapshot: 'Thông bồn cầu',
+        weightSnapshot: 1,
+        source: 'WHEEL',
+        status: 'TODO',
+      },
+    });
+  }
+
+  // 6. EXCHANGE đang chờ để demo khóa "Đang chờ đổi": Hùng ↔ Thiện, cùng tuần.
+  const hungSlot = take(hung);
+  const thienSlot = take(thien, hungSlot.weekStart);
+  const exId = ids();
+  await prisma.choreSwapRequest.create({
+    data: {
+      id: exId,
+      houseId,
+      type: 'EXCHANGE',
+      requesterMemberId: hung,
+      targetMemberId: thien,
+      fromAssignmentId: hungSlot.id,
+      toAssignmentId: thienSlot.id,
+      note: 'Thiện đổi giúp mình nhé',
+      expiresAt: new Date(Math.min(now + 20 * HOUR, hungSlot.dueAt.getTime() - HOUR, thienSlot.dueAt.getTime() - HOUR)),
+      rootRequestId: exId,
+      fromWeightSnapshot: hungSlot.weightSnapshot,
+      toWeightSnapshot: thienSlot.weightSnapshot,
+      fromVersion: hungSlot.version,
+      toVersion: thienSlot.version,
+    },
+  });
+  await lock(hungSlot.id, exId);
+  await lock(thienSlot.id, exId);
 }
 
 /** Giờ trưa (giờ nhà, UTC+7) của một ngày: tránh lệch ngày khi hiển thị theo múi giờ. */
@@ -487,13 +754,16 @@ async function main() {
     }
   }
 
+  await cleanSwaps(house.id);
   await seedChores(house.id, users);
+  const activities = await seedRealtime(house.id, users);
+  await seedSwaps(house.id, users);
   await seedExpenses(house.id, users);
   await seedAssistantReminders(house.id, users);
 
   console.log(
     `Seed xong trong ${Date.now() - started}ms: ${house.name} (mã ${INVITE_CODE}), ` +
-      `${MEMBERS.length} tài khoản *@nestfair.demo / ${PASSWORD}`,
+      `${MEMBERS.length} tài khoản *@nestfair.demo / ${PASSWORD}, 1 vòng quay, ${activities} mục ticker, dữ liệu đổi ca`,
   );
 }
 

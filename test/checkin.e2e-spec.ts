@@ -35,7 +35,7 @@ describe('Check-in (e2e)', () => {
 
   it('người được giao check-in → PENDING_VERIFY, lưu ảnh + băm, thư mục theo nhà, emit chore:submitted', async () => {
     const { users, assignment, houseId } = await assignmentIn(fx, ['Hùng', 'Thiện']);
-    const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
+    const emit = vi.spyOn(fx.app.get(EventsService), 'send');
     const file = ok();
     const res = await checkin(users[1].token, assignment.id, file).expect(200);
     expect(res.body).toMatchObject({ id: assignment.id, status: 'PENDING_VERIFY', isLate: false, verifyMode: null });
@@ -44,7 +44,7 @@ describe('Check-in (e2e)', () => {
     expect(saved.proofHash).toBe(sha256(file.buf));
     expect(saved.submittedAt).toBeTruthy();
     expect(upload).toHaveBeenCalledWith(expect.any(Buffer), `houses/${houseId}/proofs`);
-    expect(emit).toHaveBeenCalledWith(houseId, 'chore:submitted', expect.objectContaining({ assignmentId: assignment.id }));
+    expect(emit).toHaveBeenCalledWith(`house:${houseId}`, expect.objectContaining({ type: 'chore:submitted', payload: expect.objectContaining({ assignmentId: assignment.id }) }));
   });
 
   it('T-13: không có file → 400 PROOF_REQUIRED; gif / giả MIME → 415; quá 5MB → 413 — không gọi upload', async () => {
@@ -168,7 +168,7 @@ describe('Check-in (e2e)', () => {
 
   it('DB lỗi sau khi upload → xóa ảnh vừa up (không để ảnh mồ côi), ca vẫn TODO', async () => {
     const { users, assignment } = await assignmentIn(fx, ['Hùng', 'Thiện']);
-    vi.spyOn(fx.prisma.choreAssignment, 'updateMany').mockRejectedValueOnce(new Error('db down'));
+    vi.spyOn(fx.prisma, '$transaction').mockRejectedValueOnce(new Error('db down'));
     await checkin(users[1].token, assignment.id, ok()).expect(500);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect((await row(assignment.id)).status).toBe('TODO');

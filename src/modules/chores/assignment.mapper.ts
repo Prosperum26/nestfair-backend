@@ -10,6 +10,7 @@ export const ASSIGNMENT_INCLUDE = {
       user: { select: { fullName: true, avatarUrl: true } },
     },
   },
+  wheelLog: { select: { id: true, revealAt: true } },
 } satisfies Prisma.ChoreAssignmentInclude;
 
 export type AssignmentRow = Prisma.ChoreAssignmentGetPayload<{
@@ -34,6 +35,7 @@ export function toAssignmentDto(row: AssignmentRow): AssignmentDto {
     dueAt: row.dueAt,
     status: row.status,
     source: row.source,
+    wheelSpinId: row.wheelLog?.id ?? null,
     proofImageUrl: row.proofImageUrl,
     submittedAt: row.submittedAt,
     isLate: row.isLate,

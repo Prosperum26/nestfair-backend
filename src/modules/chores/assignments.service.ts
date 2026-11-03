@@ -1,11 +1,14 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { HouseMembership } from '../houses/guards/house-member.guard.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ActivityService } from '../activity/activity.service.js';
+import { actorOfMember } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { ASSIGNMENT_INCLUDE, toAssignmentDto, toScheduleMeta } from './assignment.mapper.js';
 import type { PreviewResultDto, ShuffleResultDto, WeekViewDto } from './dto/assignment-response.dto.js';
 import type { ShuffleAssignmentsDto } from './dto/week-key.dto.js';
-import { dateOf } from './schedule-context.js';
+import type { WeekSchedule } from '../../generated/prisma/client.js';
+import { dateOf, type Db } from './schedule-context.js';
 import { ScheduleService } from './schedule.service.js';
 import { addDays, currentWeekStart, type DateStr, isValidWeekKey, weekStartFromKey } from './week.js';
 
@@ -15,6 +18,7 @@ export class AssignmentsService {
     private readonly prisma: PrismaService,
     private readonly schedule: ScheduleService,
     private readonly events: EventsService,
+    private readonly activity: ActivityService,
   ) {}
 
   private weekStartOf(weekKey: string | undefined, now: Date): DateStr {
@@ -29,7 +33,8 @@ export class AssignmentsService {
     const [sched, rows] = await Promise.all([
       this.prisma.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } }),
       this.prisma.choreAssignment.findMany({
-        where: { houseId, weekStart: dateOf(weekStart) },
+        // Ca vòng quay chỉ hiện khi bánh xe đã dừng (không lộ kết quả trước animation).
+        where: { houseId, weekStart: dateOf(weekStart), OR: [{ wheelLog: { is: null } }, { wheelLog: { is: { revealAt: { lte: now } } } }] },
         include: ASSIGNMENT_INCLUDE,
         orderBy: [{ occurrenceDate: 'asc' }, { dueAt: 'asc' }, { titleSnapshot: 'asc' }],
       }),
@@ -57,23 +62,33 @@ export class AssignmentsService {
 
   async shuffle(houseId: string, actor: Pick<HouseMembership, 'id' | 'role'>, dto: ShuffleAssignmentsDto, now: Date = new Date()): Promise<ShuffleResultDto> {
     const weekStart = this.weekStartOf(dto.weekKey, now);
+    const who = await actorOfMember(this.prisma, actor.id);
+    const outbox = this.events.outbox();
+    // Live Ticker: một mục cho cả lịch (không phải từng ca), ghi trong transaction sinh / xáo lịch.
+    const record = (type: 'schedule.generated' | 'schedule.rerolled') => async (tx: Db, s: WeekSchedule) => {
+      if (s.status === 'EMPTY') return;
+      await this.activity.record(tx, outbox, {
+        houseId,
+        type,
+        actor: who,
+        params: { weekKey: s.weekKey, relaxed: s.relaxed },
+        dedupeKey: `schedule:${s.id}:${s.rerollCount}`,
+      });
+    };
     let changed: boolean;
     let message: string | undefined;
     if (dto.mode === 'CREATE') {
-      changed = (await this.schedule.createSchedule(houseId, weekStart, now)).created;
+      changed = (await this.schedule.createSchedule(houseId, weekStart, now, record('schedule.generated'))).created;
     } else {
-      const res = await this.schedule.rerollSchedule(houseId, weekStart, { memberId: actor.id, role: actor.role }, now);
+      const res = await this.schedule.rerollSchedule(houseId, weekStart, { memberId: actor.id, role: actor.role }, now, record('schedule.rerolled'));
       changed = res.changed;
       message = res.message;
     }
     const view = await this.view(houseId, weekStart, now);
     if (changed && view.schedule) {
-      this.events.emitToHouse(houseId, 'chore:shuffled', {
-        weekKey: view.schedule.weekKey,
-        relaxed: view.schedule.relaxed,
-        reasons: view.schedule.reasons,
-      });
+      outbox.toHouse(houseId, 'chore:shuffled', { weekKey: view.schedule.weekKey, relaxed: view.schedule.relaxed, reasons: view.schedule.reasons }, who);
     }
+    outbox.flush();
     return { changed, message, schedule: view.schedule, assignments: view.assignments };
   }
 }

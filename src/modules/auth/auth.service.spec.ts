@@ -258,8 +258,9 @@ describe('AuthService', () => {
   });
 
   describe('logout', () => {
-    it('thu hồi refresh token đang dùng', async () => {
-      await service.logout('raw');
+    it('thu hồi refresh token đang dùng và trả userId của phiên', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({ userId: 'u1' });
+      await expect(service.logout('raw')).resolves.toBe('u1');
 
       expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
         where: { tokenHash: sha256('raw'), revokedAt: null },
@@ -268,7 +269,7 @@ describe('AuthService', () => {
     });
 
     it('không có cookie thì bỏ qua, không lỗi', async () => {
-      await expect(service.logout(undefined)).resolves.toBeUndefined();
+      await expect(service.logout(undefined)).resolves.toBeNull();
       expect(prisma.refreshToken.updateMany).not.toHaveBeenCalled();
     });
   });

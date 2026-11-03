@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { HousesModule } from '../houses/houses.module.js';
+import { SwapsModule } from '../swaps/swaps.module.js';
 import { UploadsModule } from '../uploads/uploads.module.js';
 import { AbsencesController, BreaksController, ChoreAuditController } from './absences.controller.js';
 import { AbsencesService } from './absences.service.js';
@@ -18,7 +19,7 @@ import { ChoresController } from './chores.controller.js';
 import { ChoresService } from './chores.service.js';
 
 @Module({
-  imports: [AuthModule, HousesModule, UploadsModule],
+  imports: [AuthModule, HousesModule, UploadsModule, SwapsModule],
   controllers: [
     ChoresController,
     AssignmentsController,

@@ -27,6 +27,7 @@ import {
 } from '@nestjs/swagger';
 import type { CookieOptions, Request, Response } from 'express';
 import type { Env } from '../../config/env.validation.js';
+import { EventsService } from '../events/events.service.js';
 import {
   AuthService,
   type GoogleProfile,
@@ -58,6 +59,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly config: ConfigService<Env, true>,
+    private readonly events: EventsService,
   ) {}
 
   @Post('register')
@@ -114,8 +116,10 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
-    await this.auth.logout(this.readCookie(req));
+    const userId = await this.auth.logout(this.readCookie(req));
     res.clearCookie(REFRESH_COOKIE, this.cookieOptions());
+    // Ngắt socket đang mở của user để không giữ room của phiên cũ (thiết bị khác tự làm mới phiên rồi nối lại).
+    if (userId) this.events.disconnectUser(userId);
   }
 
   @Get('me')

@@ -2,11 +2,12 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import { coded } from '../../common/coded-exception.js';
 import type { WeekSchedule } from '../../generated/prisma/client.js';
-import type { GeneratedBy, HouseRole } from '../../generated/prisma/enums.js';
+import type { AssignmentSource, GeneratedBy, HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { EventsService } from '../events/events.service.js';
+import { EventsService, type Outbox } from '../events/events.service.js';
 import { generateWeek, type GenResult } from './algorithms/schedule-generator.js';
 import { rollingLoad } from './algorithms/load.js';
+import { ChoreDebtService } from '../swaps/chore-debt.service.js';
 import { AuditService } from './audit.service.js';
 import { buildGenContext, dateOf, type Db, dsOf } from './schedule-context.js';
 import { createScheduleRows, scheduleFields, storeSlots } from './schedule-store.js';
@@ -28,6 +29,9 @@ export interface PreviewResult {
 
 const randomSeed = () => randomInt(1, 2 ** 31 - 1);
 
+/** Gọi trong cùng transaction khi một lịch vừa được tạo / xáo lại (vd. ghi Live Ticker). */
+export type OnScheduleChanged = (tx: Db, schedule: WeekSchedule) => Promise<void>;
+
 @Injectable()
 export class ScheduleService {
   private readonly logger = new Logger(ScheduleService.name);
@@ -36,6 +40,7 @@ export class ScheduleService {
     private readonly prisma: PrismaService,
     private readonly events: EventsService,
     private readonly audit: AuditService,
+    private readonly debts: ChoreDebtService,
   ) {}
 
   /** H5: chỉ sinh cho tuần hiện tại hoặc tuần kế tiếp. */
@@ -63,24 +68,41 @@ export class ScheduleService {
     weekStart: DateStr,
     by: GeneratedBy,
     now: Date = new Date(),
+    onCreated?: OnScheduleChanged,
   ): Promise<{ schedule: WeekSchedule; created: boolean }> {
     this.checkRange(weekStart, now);
-    return this.withHouseLock(houseId, async (tx) => {
+    // Sự kiện sinh ra trong lúc lưu lịch (vd. mở cửa sổ chọn bù) chỉ phát sau khi transaction commit.
+    const outbox = this.events.outbox();
+    const out = await this.withHouseLock(houseId, async (tx) => {
       const existing = await tx.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } });
       if (existing) return { schedule: existing, created: false };
-      return { schedule: await this.generateAndStore(tx, houseId, weekStart, by, randomSeed(), now), created: true };
+      const schedule = await this.generateAndStore(tx, outbox, houseId, weekStart, by, randomSeed(), now);
+      await onCreated?.(tx, schedule);
+      return { schedule, created: true };
     });
+    outbox.flush();
+    return out;
   }
 
   /** "Tạo lịch tuần này": có lịch rồi thì trả lịch cũ (S-34); lịch EMPTY thì sinh lại (vừa thêm việc). */
-  async createSchedule(houseId: string, weekStart: DateStr, now: Date = new Date()): Promise<{ schedule: WeekSchedule; created: boolean }> {
+  async createSchedule(
+    houseId: string,
+    weekStart: DateStr,
+    now: Date = new Date(),
+    onCreated?: OnScheduleChanged,
+  ): Promise<{ schedule: WeekSchedule; created: boolean }> {
     this.checkRange(weekStart, now);
-    return this.withHouseLock(houseId, async (tx) => {
+    const outbox = this.events.outbox();
+    const out = await this.withHouseLock(houseId, async (tx) => {
       const existing = await tx.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } });
       if (existing && existing.status !== 'EMPTY') return { schedule: existing, created: false };
       if (existing) await tx.weekSchedule.delete({ where: { id: existing.id } });
-      return { schedule: await this.generateAndStore(tx, houseId, weekStart, 'USER', randomSeed(), now), created: true };
+      const schedule = await this.generateAndStore(tx, outbox, houseId, weekStart, 'USER', randomSeed(), now);
+      await onCreated?.(tx, schedule);
+      return { schedule, created: true };
     });
+    outbox.flush();
+    return out;
   }
 
   /** Dry-run: không ghi gì, trả seed để người xem thấy "không thiên vị". */
@@ -118,9 +140,11 @@ export class ScheduleService {
     weekStart: DateStr,
     actor: { memberId: string; role: HouseRole },
     now: Date = new Date(),
+    onRerolled?: OnScheduleChanged,
   ): Promise<{ changed: boolean; schedule: WeekSchedule; message?: string }> {
     if (actor.role !== 'ADMIN') throw coded(HttpStatus.FORBIDDEN, 'ADMIN_ONLY', 'Chỉ trưởng phòng mới xáo lại được lịch.');
-    return this.withHouseLock(houseId, async (tx) => {
+    const outbox = this.events.outbox();
+    const out = await this.withHouseLock(houseId, async (tx) => {
       const sched = await tx.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } });
       if (!sched || sched.status === 'EMPTY') throw coded(HttpStatus.NOT_FOUND, 'SCHEDULE_NOT_FOUND', 'Tuần này chưa có lịch để xáo lại.');
       if (weekStart <= toDateStr(now)) throw coded(HttpStatus.CONFLICT, 'SCHEDULE_LOCKED', 'Tuần này đã bắt đầu nên lịch đã khóa.');
@@ -128,6 +152,16 @@ export class ScheduleService {
         where: { scheduleId: sched.id, status: { notIn: ['TODO', 'UNASSIGNED', 'CANCELLED'] } },
       });
       if (activity > 0) throw coded(HttpStatus.CONFLICT, 'SCHEDULE_HAS_ACTIVITY', 'Đã có ca được nộp hoặc duyệt, không thể xáo lại cả lịch.');
+      const slotIds = (await tx.choreAssignment.findMany({ where: { scheduleId: sched.id }, select: { id: true } })).map((a) => a.id);
+      const pendingSwaps = await tx.choreSwapRequest.findMany({
+        where: { status: 'PENDING', OR: [{ fromAssignmentId: { in: slotIds } }, { toAssignmentId: { in: slotIds } }] },
+        select: { id: true },
+      });
+      if (pendingSwaps.length > 0) {
+        throw coded(HttpStatus.CONFLICT, 'SWAP_PENDING_IN_WEEK', 'Tuần này còn yêu cầu đổi ca đang chờ. Hãy hủy chúng trước khi xáo lại.', {
+          swapIds: pendingSwaps.map((s) => s.id),
+        });
+      }
       if (sched.rerollCount >= MAX_REROLLS) throw coded(HttpStatus.CONFLICT, 'REROLL_LIMIT', `Mỗi lịch chỉ được xáo lại tối đa ${MAX_REROLLS} lần.`);
 
       const current = await tx.choreAssignment.findMany({ where: { scheduleId: sched.id } });
@@ -136,10 +170,13 @@ export class ScheduleService {
       const currentSig = signature(current.map((a) => ({ choreId: a.choreId, day: dsOf(a.occurrenceDate), who: a.assigneeId })));
 
       const ctx = await buildGenContext(tx, houseId, weekStart, 0);
+      // D18: ca bù đã chọn và ca được làm hộ của nợ OPEN được ghim lại ở lịch mới.
+      const pins = await this.debts.pinsForReroll(tx, houseId, current);
+      const pinned = pins.map((p) => ({ choreId: p.choreId, date: p.date, memberId: p.memberId, source: p.kind }));
       let accepted: { seed: number; res: GenResult } | null = null;
       for (let i = 0; i < REROLL_TRIES && !accepted; i++) {
         const seed = randomSeed();
-        const res = generateWeek({ ...ctx.input, seed });
+        const res = generateWeek({ ...ctx.input, seed, pinned });
         const sig = signature(res.slots.map((s) => ({ choreId: s.choreId, day: s.occurrenceDate, who: s.memberId })));
         if (res.status !== 'EMPTY' && sig !== currentSig) accepted = { seed, res };
       }
@@ -155,9 +192,13 @@ export class ScheduleService {
         },
       });
       await storeSlots(tx, houseId, updated, ctx, accepted.res.slots);
+      await this.debts.applyRerollPins(tx, outbox, updated.id, pins, now);
       await this.audit.log(houseId, actor.memberId, 'REROLL', { weekKey: updated.weekKey, oldSeed: sched.seed, newSeed: accepted.seed }, { scheduleId: sched.id }, tx);
+      await onRerolled?.(tx, updated);
       return { changed: true, schedule: updated };
     });
+    outbox.flush();
+    return out;
   }
 
   /**
@@ -223,7 +264,7 @@ export class ScheduleService {
   /** Giao lại các ca TODO `slots` (đã lọc) cho người đủ điều kiện; không ai nhận được thì UNASSIGNED. */
   private async reassignSlots(
     houseId: string,
-    slots: { id: string; choreId: string; assigneeId: string | null; weekStart: Date; occurrenceDate: Date; weightSnapshot: number }[],
+    slots: { id: string; choreId: string; assigneeId: string | null; weekStart: Date; occurrenceDate: Date; weightSnapshot: number; source: AssignmentSource }[],
     kind: 'ORPHAN' | 'ABSENCE',
   ): Promise<{ moved: number; unassigned: number }> {
     if (slots.length === 0) return { moved: 0, unassigned: 0 };
@@ -231,6 +272,7 @@ export class ScheduleService {
     let moved = 0;
     let unassigned = 0;
     const touched: string[] = [];
+    const debtOutbox = this.events.outbox();
     const byWeek = new Map<DateStr, typeof slots>();
     for (const o of slots) byWeek.set(dsOf(o.weekStart), [...(byWeek.get(dsOf(o.weekStart)) ?? []), o]);
 
@@ -238,8 +280,9 @@ export class ScheduleService {
       const ctx = await buildGenContext(this.prisma, houseId, weekStart, 0);
       const ids = ctx.input.members.map((m) => m.id);
       const load = rollingLoad(ctx.input.history, ids, { credit: ctx.input.credit });
+      // Ca vòng quay không tính tải và không tính trần ca/ngày (đặc tả #5, Q2).
       const live = await this.prisma.choreAssignment.findMany({
-        where: { houseId, weekStart: dateOf(weekStart), assigneeId: { in: ids }, status: { notIn: ['CANCELLED', 'UNASSIGNED'] } },
+        where: { houseId, weekStart: dateOf(weekStart), assigneeId: { in: ids }, status: { notIn: ['CANCELLED', 'UNASSIGNED'] }, source: { not: 'WHEEL' } },
       });
       const perDay = new Map<string, number>();
       for (const a of live) {
@@ -256,8 +299,18 @@ export class ScheduleService {
         const pool = underCap.length > 0 ? underCap : avail;
         const preferred = pool.filter((m) => !fenced.has(`${m}|${o.choreId}`));
         const pick = (preferred.length > 0 ? preferred : pool).sort((a, b) => load[a] - load[b])[0];
-        const data = pick ? { assigneeId: pick, source: 'REASSIGN' as const } : { assigneeId: null, status: 'UNASSIGNED' as const };
-        const { count } = await this.prisma.choreAssignment.updateMany({ where: { id: o.id, status: 'TODO', assigneeId: o.assigneeId }, data });
+        // Ca vòng quay giữ nguồn WHEEL để vẫn không tính tải sau khi giao lại.
+        const data = pick
+          ? { assigneeId: pick, source: o.source === 'WHEEL' ? ('WHEEL' as const) : ('REASSIGN' as const) }
+          : { assigneeId: null, status: 'UNASSIGNED' as const };
+        const count = await this.prisma.$transaction(async (tx) => {
+          const res = await tx.choreAssignment.updateMany({ where: { id: o.id, status: 'TODO', assigneeId: o.assigneeId }, data: { ...data, version: { increment: 1 } } });
+          // Ca được làm hộ bị dời vì người làm hộ vắng: nợ ca không còn lý do tồn tại (D9).
+          if (res.count > 0 && kind === 'ABSENCE') await this.debts.cancelForMovedCover(tx, o.id);
+          // Ca bù của người nợ bị dời đi: mở lại cho người được làm bù chọn ca khác (không để nợ trỏ vào ca của người khác).
+          if (res.count > 0) await this.debts.releasePayback(tx, debtOutbox, o.id, new Date());
+          return res.count;
+        });
         if (count === 0) continue;
         touched.push(o.id);
         if (pick) {
@@ -268,17 +321,20 @@ export class ScheduleService {
         await this.audit.log(houseId, null, `${kind}_${pick ? 'REASSIGN' : 'UNASSIGNED'}`, { from: o.assigneeId, to: pick ?? null }, { assignmentId: o.id });
       }
     }
-    if (touched.length > 0) this.events.emitToHouse(houseId, 'chore:reassigned', { assignmentIds: touched });
+    debtOutbox.flush();
+    if (touched.length > 0) this.events.outbox().toHouse(houseId, 'chore:reassigned', { assignmentIds: touched }).flush();
     return { moved, unassigned };
   }
 
   // ---- nội bộ ----
 
-  private async generateAndStore(tx: Db, houseId: string, weekStart: DateStr, by: GeneratedBy, seed: number, now: Date): Promise<WeekSchedule> {
+  private async generateAndStore(tx: Db, outbox: Outbox, houseId: string, weekStart: DateStr, by: GeneratedBy, seed: number, now: Date): Promise<WeekSchedule> {
     const ctx = await buildGenContext(tx, houseId, weekStart, seed);
     const res = generateWeek(ctx.input);
     const started = weekStart <= toDateStr(now);
     const status = res.status === 'EMPTY' ? 'EMPTY' : started ? 'LOCKED' : 'PUBLISHED';
-    return createScheduleRows(tx, houseId, weekStart, by, seed, ctx, res, status);
+    const created = await createScheduleRows(tx, houseId, weekStart, by, seed, ctx, res, status);
+    if (status !== 'EMPTY') await this.debts.openWindowsForNewSchedule(tx, outbox, houseId, created.weekStart, created.createdAt);
+    return created;
   }
 }
