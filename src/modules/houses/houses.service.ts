@@ -7,6 +7,8 @@ import {
 import { Prisma } from '../../generated/prisma/client.js';
 import type { HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { EventsService } from '../events/events.service.js';
+import { closeListingIfFull } from '../listing/close-if-full.js';
 import type { CreateHouseDto } from './dto/create-house.dto.js';
 import type {
   HouseDetailDto,
@@ -24,7 +26,10 @@ const isUniqueViolation = (error: unknown) =>
 
 @Injectable()
 export class HousesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: EventsService,
+  ) {}
 
   /** Tạo nhà, người tạo là trưởng phòng (ADMIN). */
   async create(userId: string, dto: CreateHouseDto): Promise<HouseDetailDto> {
@@ -49,7 +54,7 @@ export class HousesService {
    * không bị vượt khi nhiều người cùng vào lúc nhà còn 1 chỗ.
    */
   async join(userId: string, inviteCode: string): Promise<HouseDetailDto> {
-    const houseId = await this.prisma
+    const joined = await this.prisma
       .$transaction(async (tx) => {
         const [house] = await tx.$queryRaw<
           { id: string; maxMembers: number; inviteExpiresAt: Date }[]
@@ -75,7 +80,14 @@ export class HousesService {
         await tx.houseMember.create({
           data: { houseId: house.id, userId, role: 'ROOMMATE' },
         });
-        return house.id;
+        // Người vào cuối làm nhà đủ người thì tin OPEN tự đóng, cùng transaction và cùng khóa dòng nhà.
+        const closed = await closeListingIfFull(
+          tx,
+          house.id,
+          active.length + 1,
+          house.maxMembers,
+        );
+        return { houseId: house.id, closed };
       })
       .catch((error: unknown) => {
         // Cùng một người bấm "Vào nhà" 2 lần cùng lúc: partial unique index chặn dòng thứ hai.
@@ -85,7 +97,14 @@ export class HousesService {
         throw error;
       });
 
-    return this.detail(houseId, 'ROOMMATE');
+    // Chỉ phát sau khi commit để client nhận event thì DB đã là CLOSED.
+    if (joined.closed) {
+      this.events.emitToHouse(joined.houseId, 'listing:closed', {
+        listingId: joined.closed.listingId,
+        reason: 'FULL',
+      });
+    }
+    return this.detail(joined.houseId, 'ROOMMATE');
   }
 
   /** Các nhà user đang ở (cho house switcher), nhà vào gần nhất đứng đầu. */
