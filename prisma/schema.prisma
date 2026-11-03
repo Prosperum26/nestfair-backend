@@ -92,6 +92,7 @@ model House {
   auditLogs     ChoreAuditLog[]
   expenses      Expense[]
   settlements   Settlement[]
+  listing       RoomListing?
 
   @@map("houses")
 }
@@ -427,4 +428,75 @@ model Settlement {
   @@index([houseId, status])
   @@index([houseId, createdAt])
   @@map("settlements")
+}
+
+enum ListingStatus {
+  DRAFT
+  OPEN
+  CLOSED
+}
+
+enum ListingCloseReason {
+  FULL
+  MANUAL
+}
+
+enum GenderWanted {
+  MALE
+  FEMALE
+  ANY
+}
+
+enum ListingPhotoCategory {
+  BEDROOM
+  BATHROOM
+  LIVING
+}
+
+/// Issue #11: tin tìm người ở ghép. Một tin mỗi nhà (houseId UNIQUE).
+/// Ràng buộc CHECK viết tay trong migration (slug, giá, SĐT, closeReason, otherFees).
+model RoomListing {
+  id                   String              @id @default(uuid()) @db.Uuid
+  houseId              String              @unique @db.Uuid
+  /// 8 ký tự base62, bất biến sau khi tạo (QR đã in không được chết).
+  slug                 String              @unique @db.VarChar(8)
+  status               ListingStatus       @default(DRAFT)
+  /// Có khi và chỉ khi status = CLOSED.
+  closeReason          ListingCloseReason?
+  locationText         String              @db.VarChar(120)
+  genderWanted         GenderWanted        @default(ANY)
+  /// VNĐ / người / tháng.
+  rentPerMonth         Int
+  /// [{ name, amount }], tối đa 8 (kiểm ở DTO).
+  otherFees            Json                @default("[]")
+  description          String              @default("") @db.VarChar(1000)
+  roommateExpectations String              @default("") @db.VarChar(500)
+  /// ^0\d{9}$
+  contactPhone         String              @db.VarChar(10)
+  showChoreSchedule    Boolean             @default(true)
+  publishedAt          DateTime?
+  closedAt             DateTime?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  house  House          @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  photos ListingPhoto[]
+
+  @@map("room_listings")
+}
+
+model ListingPhoto {
+  id        String               @id @default(uuid()) @db.Uuid
+  listingId String               @db.Uuid
+  category  ListingPhotoCategory
+  /// URL Cloudinary.
+  url       String
+  /// 0 = đứng đầu nhóm; ảnh bìa = BEDROOM có sortOrder nhỏ nhất.
+  sortOrder Int
+  createdAt DateTime             @default(now())
+
+  listing RoomListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId, category, sortOrder])
+  @@map("listing_photos")
 }
