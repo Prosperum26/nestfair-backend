@@ -1,6 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { coded } from '../../common/coded-exception.js';
-import type { Prisma } from '../../generated/prisma/client.js';
+import { Prisma } from '../../generated/prisma/client.js';
 import type { SplitType } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { EventsService } from '../events/events.service.js';
@@ -8,7 +8,7 @@ import type { HouseMembership } from '../houses/guards/house-member.guard.js';
 import { CloudinaryService, publicIdFromUrl } from '../uploads/cloudinary.service.js';
 import { type UploadedImage, validateImageFile } from '../uploads/image-validation.js';
 import { computeSplit, type SplitShare } from './algorithms/split.js';
-import { assertItemizedItems, itemsForStorage, parseStoredItems } from './expense-items.js';
+import { assertItemizedItems, clearAssignees, itemsForStorage, parseStoredItems } from './expense-items.js';
 import type { CreateExpenseDto, ExactSplitDto } from './dto/create-expense.dto.js';
 import type { ExpenseDto, ExpenseSummaryDto, UploadedUrlDto } from './dto/expense-response.dto.js';
 import type { ListExpensesQuery } from './dto/list-expenses.query.js';
@@ -184,12 +184,15 @@ export class ExpensesService {
 
     const total = dto.totalAmount ?? old.totalAmount;
     const splitType = dto.splitType ?? old.splitType;
+    const itemized = splitType === 'ITEMIZED';
+    if (itemized && dto.items !== undefined) assertItemizedItems(dto.items);
+    // Với kiểu chia khác, items chỉ để xem lại nên không kéo theo chia lại.
     const resplit =
       dto.totalAmount !== undefined ||
       dto.splitType !== undefined ||
       dto.participantIds !== undefined ||
       dto.splits !== undefined ||
-      dto.items !== undefined;
+      (dto.items !== undefined && itemized);
     let shares: SplitShare[] | undefined;
     if (resplit) {
       const sameType = splitType === old.splitType;
@@ -197,7 +200,7 @@ export class ExpensesService {
         {
           splitType,
           total,
-          items: splitItems(dto.items),
+          items: itemized ? splitItems(dto.items) : undefined,
           participantIds: dto.participantIds ?? (sameType && splitType === 'CUSTOM' ? old.splits.map((s) => s.userId) : undefined),
           splits:
             dto.splits ??
@@ -208,6 +211,16 @@ export class ExpensesService {
         active,
         allowed,
       );
+    }
+
+    // items: gửi thì thay (rỗng = xóa); không gửi thì giữ, trừ khi đổi khỏi ITEMIZED (xóa người dùng món).
+    let nextItems: Prisma.InputJsonValue | typeof Prisma.DbNull | undefined;
+    if (dto.items !== undefined) {
+      const stored = itemsForStorage(dto.items, splitType);
+      nextItems = stored.length ? stored : Prisma.DbNull;
+    } else if (old.splitType === 'ITEMIZED' && !itemized) {
+      const cleared = clearAssignees(parseStoredItems(old.items));
+      nextItems = cleared.length ? cleared : Prisma.DbNull;
     }
 
     const receiptChanged = dto.receiptImageUrl !== undefined && dto.receiptImageUrl !== old.receiptImageUrl;
@@ -226,6 +239,7 @@ export class ExpensesService {
           spentAt: dto.spentAt !== undefined ? this.spentAt(dto.spentAt, now) : undefined,
           note: dto.note !== undefined ? dto.note || null : undefined,
           receiptImageUrl: receiptChanged ? dto.receiptImageUrl : undefined,
+          items: nextItems,
           ...(shares ? { splits: { create: shares.map((s) => ({ userId: s.userId, allocatedAmount: s.amount })) } } : {}),
         },
         include: EXPENSE_INCLUDE,

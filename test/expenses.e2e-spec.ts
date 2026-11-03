@@ -557,5 +557,71 @@ describe('Expenses (e2e)', () => {
       const scan = await makeScan(houseId, users[0].id);
       await fx.as(users[0].token).patch(path, { receiptScanId: scan.id }).expect(400);
     });
+
+    describe('PATCH và danh sách món', () => {
+      const setup = async (names = ['Hùng', 'Thiện', 'Mai', 'Quân']) => {
+        const { houseId, users } = await fx.houseWith(names);
+        return { houseId, users, ids: users.map((u) => u.id) };
+      };
+
+      it('chỉ đổi title trên khoản ITEMIZED: items và phần chia y nguyên', async () => {
+        const { houseId, users, ids } = await setup();
+        const created = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+        const res = await fx.as(users[0].token).patch(url(houseId, `/${created.body.id}`), { title: 'BHX đổi tên' }).expect(200);
+        expect(res.body.items).toEqual(bhxItems(ids));
+        expect(amountsOf(res.body)).toEqual(amountsOf(created.body));
+      });
+
+      it('ITEMIZED gửi items mới kèm tiền mới: items được thay, phần chia tính lại, Σ bằng tổng', async () => {
+        const { houseId, users, ids } = await setup();
+        const created = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+        const next = [{ name: 'x', lineTotal: 30_000, userIds: [ids[0], ids[1]] }];
+        const res = await fx
+          .as(users[0].token)
+          .patch(url(houseId, `/${created.body.id}`), { totalAmount: 33_000, splitType: 'ITEMIZED', items: next })
+          .expect(200);
+        expect(res.body.items).toEqual(next);
+        expect(amountsOf(res.body)).toEqual({ [ids[0]]: 16_500, [ids[1]]: 16_500 });
+      });
+
+      it('khoản EQUAL: PATCH items thay danh sách mà không đổi phần chia; items: [] xóa danh sách', async () => {
+        const { houseId, users } = await setup(['Hùng', 'Thiện', 'Mai']);
+        const created = await fx
+          .as(users[0].token)
+          .post(url(houseId), { ...base, items: [{ name: 'a', lineTotal: 40_000 }] })
+          .expect(201);
+        const path = url(houseId, `/${created.body.id}`);
+
+        const replaced = await fx.as(users[0].token).patch(path, { items: [{ name: 'b', lineTotal: 60_000 }, { name: 'c', lineTotal: 40_000 }] }).expect(200);
+        expect(replaced.body.items).toEqual([
+          { name: 'b', lineTotal: 60_000, userIds: [] },
+          { name: 'c', lineTotal: 40_000, userIds: [] },
+        ]);
+        expect(amountsOf(replaced.body)).toEqual(amountsOf(created.body));
+
+        const cleared = await fx.as(users[0].token).patch(path, { items: [] }).expect(200);
+        expect(cleared.body.items).toEqual([]);
+        expect((await fx.prisma.expense.findUniqueOrThrow({ where: { id: created.body.id } })).items).toBeNull();
+      });
+
+      it('đổi ITEMIZED sang EQUAL mà không gửi items: giữ tên và tiền, xóa userIds', async () => {
+        const { houseId, users, ids } = await setup();
+        const created = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+        const res = await fx.as(users[0].token).patch(url(houseId, `/${created.body.id}`), { splitType: 'EQUAL' }).expect(200);
+        expect(res.body.splitType).toBe('EQUAL');
+        expect(res.body.items).toEqual(bhxItems(ids).map((i) => ({ name: i.name, lineTotal: i.lineTotal, userIds: [] })));
+      });
+
+      it('ITEMIZED gửi items rỗng hoặc món không người dùng → 400 ITEMS_INVALID, khoản không đổi', async () => {
+        const { houseId, users, ids } = await setup();
+        const created = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+        const path = url(houseId, `/${created.body.id}`);
+        expect((await fx.as(users[0].token).patch(path, { splitType: 'ITEMIZED', items: [] }).expect(400)).body.code).toBe('ITEMS_INVALID');
+        const noUser = await fx.as(users[0].token).patch(path, { items: [{ name: 'x', lineTotal: 1000, userIds: [] }] }).expect(400);
+        expect(noUser.body.code).toBe('ITEMS_INVALID');
+        const after = await fx.as(users[0].token).get(path).expect(200);
+        expect(after.body.items).toEqual(bhxItems(ids));
+      });
+    });
   });
 });
