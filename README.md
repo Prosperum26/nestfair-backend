@@ -281,6 +281,6 @@ hợp lệ ở tương lai (trong 1 năm) nếu không thì bị bỏ; `estimate
 - `sendDailyDigest` 08:00: một nhắc `SYSTEM` tổng hợp mỗi người mỗi ngày về ca `TODO` hôm nay, `dedupeKey = digest:<YYYY-MM-DD>` nên chạy lại không tạo trùng. Nhắc `SYSTEM` sửa giờ được, không xóa được.
 
 **Giới hạn đã biết.**
-- `CREATE_ADHOC_TASK` có trong schema và trong nút nhưng **chưa có API thực thi** (chưa có Vòng quay / việc đột xuất); frontend khóa nút kèm "Sắp có".
+- `CREATE_ADHOC_TASK` **không có API riêng**: frontend chuyển người dùng sang Việc nhà, mở Vòng quay với tên việc (`payload.title`, cắt về 60 ký tự) điền sẵn. Người dùng tự chọn người tham gia, hạn rồi bấm Quay, và chỉ khi đó mới gọi `POST /houses/:houseId/wheel/spin` (server vẫn là bên chọn người trúng). Trạng thái "đã tạo" của nút chỉ lưu ở trình duyệt.
 - Digest 08:00 hiện chỉ gồm ca trực hôm nay. Yêu cầu đổi ca sắp hết hạn và nợ ca chưa có bảng nguồn: issue đổi ca cắm thêm qua provider `DIGEST_SOURCES` (interface `DigestSource`).
 - `ApiError` ở frontend bỏ phần thừa của body lỗi nên `resetAt` thường không tới được UI; UI hiện câu "Mai mình trò chuyện tiếp nhé".
