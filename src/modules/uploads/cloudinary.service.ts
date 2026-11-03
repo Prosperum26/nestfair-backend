@@ -9,6 +9,12 @@ export function publicIdFromUrl(url: string): string | null {
   return m ? m[1] : null;
 }
 
+/** `cloudinary://<api_key>:<api_secret>@<cloud_name>` (định dạng chuẩn của Cloudinary) → 3 thông tin; null nếu sai định dạng. Giữ nguyên hoa/thường của cloud_name. */
+export function parseCloudinaryUrl(url: string): { cloud_name: string; api_key: string; api_secret: string } | null {
+  const m = /^cloudinary:\/\/([^:@/\s]+):([^@/\s]+)@([^/?\s]+)\/?$/.exec(url.trim());
+  return m ? { api_key: m[1], api_secret: m[2], cloud_name: m[3] } : null;
+}
+
 /** Upload / xóa ảnh trên Cloudinary. Việc kiểm tra định dạng và dung lượng làm ở validateImageFile. */
 @Injectable()
 export class CloudinaryService {
@@ -18,9 +24,11 @@ export class CloudinaryService {
 
   /** Trả null nếu chưa cấu hình. */
   private credentials() {
-    const cloud_name = this.config.get('CLOUDINARY_CLOUD_NAME', { infer: true });
-    const api_key = this.config.get('CLOUDINARY_API_KEY', { infer: true });
-    const api_secret = this.config.get('CLOUDINARY_API_SECRET', { infer: true });
+    // 3 biến tách rời được ưu tiên; không có thì dùng CLOUDINARY_URL.
+    const fromUrl = parseCloudinaryUrl(this.config.get('CLOUDINARY_URL', { infer: true }) ?? '');
+    const cloud_name = this.config.get('CLOUDINARY_CLOUD_NAME', { infer: true }) || fromUrl?.cloud_name;
+    const api_key = this.config.get('CLOUDINARY_API_KEY', { infer: true }) || fromUrl?.api_key;
+    const api_secret = this.config.get('CLOUDINARY_API_SECRET', { infer: true }) || fromUrl?.api_secret;
     return cloud_name && api_key && api_secret ? { cloud_name, api_key, api_secret, secure: true } : null;
   }
 
