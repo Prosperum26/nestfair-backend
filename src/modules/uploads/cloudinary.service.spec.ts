@@ -1,6 +1,6 @@
 import type { ConfigService } from '@nestjs/config';
 import { describe, expect, it } from 'vitest';
-import { CloudinaryService, publicIdFromUrl } from './cloudinary.service.js';
+import { CloudinaryService, parseCloudinaryUrl, publicIdFromUrl } from './cloudinary.service.js';
 
 describe('CloudinaryService', () => {
   it('thiếu cấu hình Cloudinary → 503, không gọi mạng', async () => {
@@ -12,6 +12,19 @@ describe('CloudinaryService', () => {
   it('destroy khi chưa cấu hình thì bỏ qua, không ném lỗi (dọn dẹp không được làm hỏng luồng chính)', async () => {
     const config = { get: () => undefined } as unknown as ConfigService<never, true>;
     await expect(new CloudinaryService(config).destroy('nestfair/houses/h/proofs/abc')).resolves.toBeUndefined();
+  });
+});
+
+describe('parseCloudinaryUrl', () => {
+  it('tách api_key, api_secret, cloud_name và giữ nguyên hoa/thường', () => {
+    expect(parseCloudinaryUrl('cloudinary://123456:AbC_dEf-1@MyCloud')).toEqual({ api_key: '123456', api_secret: 'AbC_dEf-1', cloud_name: 'MyCloud' });
+  });
+
+  it('sai định dạng thì trả null', () => {
+    expect(parseCloudinaryUrl('')).toBeNull();
+    expect(parseCloudinaryUrl('https://a:b@c')).toBeNull();
+    expect(parseCloudinaryUrl('cloudinary://onlykey@cloud')).toBeNull();
+    expect(parseCloudinaryUrl('cloudinary://k:s@')).toBeNull();
   });
 });
 

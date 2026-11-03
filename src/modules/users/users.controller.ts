@@ -11,6 +11,8 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { PublicUserDto } from '../auth/dto/auth-response.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import type { AuthUser } from '../auth/strategies/jwt.strategy.js';
+import { UpdateAssistantConsentDto } from './dto/update-assistant-consent.dto.js';
+import { UpdateOcrConsentDto } from './dto/update-ocr-consent.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { UsersService } from './users.service.js';
 
@@ -42,5 +44,33 @@ export class UsersController {
     @Body() dto: UpdateProfileDto,
   ): Promise<PublicUserDto> {
     return this.users.updateMe(user.id, dto);
+  }
+
+  @Patch('me/ocr-consent')
+  @ApiOperation({
+    summary:
+      'Đồng ý / rút lại việc gửi ảnh hóa đơn tới Google Gemini (bắt buộc đồng ý mới quét OCR được)',
+  })
+  @ApiOkResponse({ type: PublicUserDto })
+  @ApiBadRequestResponse({ description: 'enabled không phải true/false' })
+  setOcrConsent(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpdateOcrConsentDto,
+  ): Promise<PublicUserDto> {
+    return this.users.setOcrConsent(user.id, dto.enabled);
+  }
+
+  @Patch('me/assistant-consent')
+  @ApiOperation({
+    summary:
+      'Đồng ý / rút lại việc gửi nội dung chat tới Google Gemini cho Trợ lý AI (bắt buộc đồng ý mới chat được)',
+  })
+  @ApiOkResponse({ type: PublicUserDto })
+  @ApiBadRequestResponse({ description: 'enabled không phải true/false' })
+  setAssistantConsent(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpdateAssistantConsentDto,
+  ): Promise<PublicUserDto> {
+    return this.users.setAssistantConsent(user.id, dto.enabled);
   }
 }

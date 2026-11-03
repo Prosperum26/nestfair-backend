@@ -1,6 +1,9 @@
 // NestFair — Prisma schema
 // Issue #3: User, RefreshToken, House, HouseMember.
 // Issue chores: Chore, ChoreAssignment.
+// Issue #9: Expense, ExpenseSplit, Settlement.
+// Issue #11: ReceiptScan (OCR hóa đơn), User.ocrConsentAt.
+// Issue #12: AssistantMessage, Reminder, User.assistantConsentAt.
 
 generator client {
   provider            = "prisma-client"
@@ -14,23 +17,36 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(uuid()) @db.Uuid
-  email        String   @unique
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique
   /// Null khi tài khoản chỉ đăng nhập bằng Google.
   passwordHash String?
-  googleId     String?  @unique
+  googleId     String?   @unique
   fullName     String
   phone        String?
   /// Mã BIN 6 số của ngân hàng (Napas), dùng cho VietQR.
   bankBin      String?
   bankAccount  String?
   avatarUrl    String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  /// Lúc người dùng đồng ý gửi ảnh hóa đơn tới Google Gemini. Null = chưa đồng ý (chặn quét OCR).
+  ocrConsentAt DateTime?
+  /// Lúc người dùng đồng ý gửi tin nhắn tới Trợ lý AI (Gemini). Null = chưa đồng ý (chặn chat). Riêng biệt với ocrConsentAt (D5).
+  assistantConsentAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   refreshTokens RefreshToken[]
   memberships   HouseMember[]
   absences      MemberAbsence[]
+
+  expensesPaid        Expense[]      @relation("ExpensePayer")
+  expensesCreated     Expense[]      @relation("ExpenseCreator")
+  expenseSplits       ExpenseSplit[]
+  settlementsSent     Settlement[]   @relation("SettlementFrom")
+  settlementsReceived Settlement[]   @relation("SettlementTo")
+  receiptScans        ReceiptScan[]
+  assistantMessages   AssistantMessage[]
+  reminders           Reminder[]
 
   @@map("users")
 }
@@ -85,6 +101,11 @@ model House {
   auditLogs     ChoreAuditLog[]
   activities    HouseActivity[]
   wheelLogs     LuckyWheelLog[]
+  expenses      Expense[]
+  settlements   Settlement[]
+  receiptScans  ReceiptScan[]
+  assistantMessages AssistantMessage[]
+  reminders Reminder[]
 
   @@map("houses")
 }
@@ -550,4 +571,210 @@ model RotationSwap {
   failReason         String?
 
   @@map("rotation_swaps")
+}
+
+enum ExpenseCategory {
+  FOOD
+  RENT
+  ELECTRICITY
+  WATER
+  INTERNET
+  SUPPLIES
+  /// Quà cảm ơn trực dùm (issue đổi ca).
+  GIFT
+  OTHER
+}
+
+enum SplitType {
+  /// Chia đều cho cả nhà (thành viên còn ở lúc ghi khoản chi).
+  EQUAL
+  /// Chọn người hưởng, chia đều trong nhóm đó.
+  CUSTOM
+  /// Nhập số tiền từng người, tổng phải khớp.
+  EXACT
+  /// Theo từng món trên hóa đơn (OCR). Chưa cài ở issue #9.
+  ITEMIZED
+}
+
+enum SettlementStatus {
+  /// Người trả báo "đã chuyển", chờ chủ nợ xác nhận. Chưa tính vào số dư.
+  PENDING
+  CONFIRMED
+  /// Người chuyển rút lại, hoặc chủ nợ báo chưa nhận được.
+  CANCELLED
+}
+
+/// Tiền là số nguyên VNĐ. Ràng buộc SQL tay: totalAmount > 0.
+/// Dùng userId (không dùng HouseMember.id) để số dư không đứt khi rời rồi vào lại nhà.
+/// Σ ExpenseSplit.allocatedAmount = totalAmount do service kiểm tra trước khi lưu.
+model Expense {
+  id              String          @id @default(uuid()) @db.Uuid
+  houseId         String          @db.Uuid
+  payerId         String          @db.Uuid
+  createdById     String          @db.Uuid
+  title           String
+  category        ExpenseCategory
+  totalAmount     Int
+  splitType       SplitType
+  spentAt         DateTime
+  note            String?
+  receiptImageUrl String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  house       House          @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  payer       User           @relation("ExpensePayer", fields: [payerId], references: [id], onDelete: Restrict)
+  createdBy   User           @relation("ExpenseCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  splits      ExpenseSplit[]
+  receiptScan ReceiptScan?
+
+  @@index([houseId, spentAt])
+  @@index([payerId])
+  @@map("expenses")
+}
+
+/// Ràng buộc SQL tay: allocatedAmount >= 0.
+model ExpenseSplit {
+  id              String @id @default(uuid()) @db.Uuid
+  expenseId       String @db.Uuid
+  userId          String @db.Uuid
+  allocatedAmount Int
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([expenseId, userId])
+  @@index([userId])
+  @@map("expense_splits")
+}
+
+/// Một lần chuyển tiền giữa hai thành viên. Chỉ CONFIRMED mới ảnh hưởng số dư.
+/// SQL tay trong migration: amount > 0, fromUserId <> toUserId, confirmedAt chỉ có khi CONFIRMED,
+/// partial unique index (houseId, fromUserId, toUserId) WHERE status = 'PENDING' (mỗi cặp một báo chờ xác nhận).
+model Settlement {
+  id          String           @id @default(uuid()) @db.Uuid
+  houseId     String           @db.Uuid
+  fromUserId  String           @db.Uuid
+  toUserId    String           @db.Uuid
+  amount      Int
+  status      SettlementStatus @default(PENDING)
+  /// Ảnh bill đính kèm khi báo đã chuyển.
+  proofUrl    String?
+  note        String?
+  createdAt   DateTime         @default(now())
+  confirmedAt DateTime?
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  from  User  @relation("SettlementFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  to    User  @relation("SettlementTo", fields: [toUserId], references: [id], onDelete: Restrict)
+
+  @@index([houseId, status])
+  @@index([houseId, createdAt])
+  @@map("settlements")
+}
+
+enum ReceiptScanStatus {
+  /// Có bản nháp để người dùng xác nhận.
+  DRAFT
+  /// Gemini lỗi / ảnh không đọc được: chuyển sang nhập tay.
+  FAILED
+  /// Đã gắn vào một khoản chi.
+  USED
+}
+
+/// Một lần quét hóa đơn. Chỉ là bản nháp: không bao giờ tự tạo Expense (AI không tự ghi dữ liệu).
+/// Mỗi dòng cũng là một lần gọi Gemini nên đếm hạn mức 20 lượt / nhà / ngày bằng cách đếm dòng theo ngày giờ VN.
+model ReceiptScan {
+  id            String            @id @default(uuid()) @db.Uuid
+  houseId       String            @db.Uuid
+  scannedById   String            @db.Uuid
+  imageUrl      String
+  status        ReceiptScanStatus
+  /// NOT_A_RECEIPT | UNREADABLE | AI_TIMEOUT | AI_UNAVAILABLE khi status = FAILED.
+  failureReason String?
+  /// JSON nguyên bản Gemini trả về (debug và đánh giá độ chính xác OCR trong báo cáo).
+  draftJson     Json?
+  model         String?
+  latencyMs     Int?
+  /// Khoản chi được tạo từ bản nháp này (một-một).
+  expenseId     String?           @unique @db.Uuid
+  createdAt     DateTime          @default(now())
+
+  house     House    @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  scannedBy User     @relation(fields: [scannedById], references: [id], onDelete: Restrict)
+  expense   Expense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+
+  @@index([houseId, createdAt])
+  @@map("receipt_scans")
+}
+
+enum AssistantRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum AssistantCategory {
+  /// Mẹo sinh hoạt, tiết kiệm…
+  TIP
+  /// Sự cố đời sống (điện, nước, chóng mặt nhà…).
+  INCIDENT
+  /// Mâu thuẫn phòng trọ, cần khéo léo.
+  EMOTIONAL
+  /// Tin nhắn chứa nhắc nhở được tạo.
+  REMINDER
+  OTHER
+}
+
+enum ReminderSource {
+  /// Người dùng tự tạo.
+  USER
+  /// Sinh từ Trợ lý AI (người dùng bấm nút suggestedAction).
+  ASSISTANT
+  /// Cron / hệ thống.
+  SYSTEM
+}
+
+/// Tin nhắn trong phiên chat với Trợ lý AI. Riêng tư theo userId: không API nào trả tin nhắn cho người khác.
+/// threadId là UUID do client sinh cho mỗi phiên chat (chưa cần bảng Thread).
+model AssistantMessage {
+  id          String             @id @default(uuid()) @db.Uuid
+  userId      String             @db.Uuid
+  houseId     String             @db.Uuid
+  threadId    String             @db.Uuid
+  role        AssistantRole
+  content     String             @db.Text
+  category    AssistantCategory?
+  /// suggestedActions do Gemini gợi ý; chỉ là nút, người dùng bấm thì client mới gọi API thường.
+  actionsJson Json?
+  createdAt   DateTime           @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, houseId, createdAt])
+  @@index([userId, threadId, createdAt])
+  @@map("assistant_messages")
+}
+
+/// Nhắc nhở. Cron quét các dòng sentAt IS NULL có remindAt <= now rồi gửi socket + đánh sentAt.
+/// SQL tay trong migration: partial index trên ("remindAt") WHERE "sentAt" IS NULL.
+/// @@unique([userId, dedupeKey]): bấm nút AI hai lần không tạo hai nhắc giống nhau (Postgres unique cho phép nhiều NULL).
+model Reminder {
+  id        String         @id @default(uuid()) @db.Uuid
+  userId    String         @db.Uuid
+  houseId   String         @db.Uuid
+  title     String
+  remindAt  DateTime
+  source    ReminderSource
+  sentAt    DateTime?
+  dedupeKey String?
+  createdAt DateTime       @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, remindAt])
+  @@map("reminders")
 }

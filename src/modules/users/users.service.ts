@@ -40,4 +40,43 @@ export class UsersService {
       select: publicUserSelect,
     });
   }
+
+  /**
+   * Đồng ý (hoặc rút lại) việc gửi ảnh hóa đơn tới Google Gemini. Đồng ý lần nữa giữ nguyên mốc đầu tiên;
+   * tắt khi chưa đồng ý thì không ghi gì.
+   */
+  async setOcrConsent(
+    userId: string,
+    enabled: boolean,
+    now = new Date(),
+  ): Promise<PublicUser> {
+    const current = await this.getMe(userId);
+    if (enabled === (current.ocrConsentAt !== null)) return current;
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { ocrConsentAt: enabled ? now : null },
+      select: publicUserSelect,
+    });
+  }
+
+  /**
+   * Đồng ý (hoặc rút lại) việc chat với Trợ lý AI (Gemini). Riêng biệt với OCR:
+   * bật/tắt mốc này không đụng ocrConsentAt. Đồng ý lần nữa giữ nguyên mốc đầu tiên;
+   * tắt thì xóa mốc; tắt khi chưa đồng ý thì không ghi gì.
+   */
+  async setAssistantConsent(
+    userId: string,
+    enabled: boolean,
+    now = new Date(),
+  ): Promise<PublicUser> {
+    const current = await this.getMe(userId);
+    if (enabled === (current.assistantConsentAt !== null)) return current;
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { assistantConsentAt: enabled ? now : null },
+      select: publicUserSelect,
+    });
+  }
 }

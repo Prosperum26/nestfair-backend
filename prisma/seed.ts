@@ -70,6 +70,28 @@ const CHORES = [
 const SAMPLE_PROOF_URL = 'https://res.cloudinary.com/demo/image/upload/sample.jpg';
 
 /**
+ * Hai khoản chi tháng 10 có nguồn từ OCR hóa đơn (đặc tả: seed có 2 khoản chi từ OCR). Mỗi khoản có một
+ * ReceiptScan đã dùng, draftJson là JSON Gemini trả về; tổng các món bằng đúng tổng khoản chi nên không đổi số dư.
+ */
+const OCR_DRAFTS: Record<string, { merchant: string; items: { name: string; quantity: number; lineTotal: number }[] }> = {
+  'Đi chợ cuối tuần': {
+    merchant: 'Bách Hóa Xanh',
+    items: [
+      { name: 'Rau củ', quantity: 1, lineTotal: 180_000 },
+      { name: 'Thịt cá', quantity: 1, lineTotal: 240_000 },
+      { name: 'Trái cây', quantity: 1, lineTotal: 100_000 },
+    ],
+  },
+  'Nước rửa chén & giấy': {
+    merchant: 'Co.opmart',
+    items: [
+      { name: 'Nước rửa chén', quantity: 1, lineTotal: 45_000 },
+      { name: 'Giấy vệ sinh', quantity: 1, lineTotal: 75_000 },
+    ],
+  },
+};
+
+/**
  * Việc nhà theo Design.md mục 7: 6 việc, 4 người. Dùng chính thuật toán sinh lịch (seed cố định) cho
  * 3 tuần lịch sử (đã xong, có 1 ca MISSED), tuần này (có ca chờ duyệt, bị từ chối và bỏ ca để demo) và tuần sau
  * (đã công bố, chưa bắt đầu, còn xáo lại được). Xóa và tạo lại dữ liệu việc nhà của nhà demo mỗi lần chạy.
@@ -425,6 +447,263 @@ async function seedSwaps(houseId: string, users: Record<string, { id: string; fu
   await lock(thienSlot.id, exId);
 }
 
+/** Giờ trưa (giờ nhà, UTC+7) của một ngày: tránh lệch ngày khi hiển thị theo múi giờ. */
+const at = (ymd: string) => new Date(`${ymd}T12:00:00+07:00`);
+
+/** Ngày hôm nay (giờ VN) dạng YYYY-MM-DD. */
+const vnToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+
+/** Ngày của thứ kế tiếp trong tuần (1 = Thứ Hai…7 = Chủ Nhật) theo lịch VN, luôn ở tương lai. */
+const vnNextWeekday = (isoWeekday: number) => {
+  const base = new Date(`${vnToday()}T00:00:00+07:00`);
+  for (let add = 1; add <= 7; add += 1) {
+    // Mốc 00:00+07:00 cộng 7 giờ là 00:00 UTC cùng ngày lịch VN, đọc an toàn qua getUTC*.
+    const vn = new Date(base.getTime() + (add * 86_400_000 + 7 * 3_600_000));
+    const dow = vn.getUTCDay() === 0 ? 7 : vn.getUTCDay();
+    if (dow === isoWeekday) return vn.toISOString().slice(0, 10);
+  }
+  throw new Error('Không tìm thấy thứ trong tuần kế tiếp');
+};
+
+/**
+ * Sổ chi theo Design.md mục 7: tháng 10 tổng 2.280.000đ (6 hóa đơn, ảnh 07), tháng 9 đã tất toán hết
+ * bằng 3 settlement CONFIRMED, và 1 settlement PENDING (Thiện báo đã chuyển cho Mai, ảnh 09).
+ * Số dư ròng sau seed: Mai +380.000đ, Quân +170.000đ, Hùng −170.000đ, Thiện −380.000đ, nên rút gọn còn
+ * Thiện → Mai 380.000đ và Hùng → Quân 170.000đ. Xóa và tạo lại sổ chi của nhà demo mỗi lần chạy.
+ */
+async function seedExpenses(houseId: string, users: Record<string, { id: string }>) {
+  const id = (key: string) => users[key].id;
+  const all = MEMBERS.map((m) => m.key);
+  const equal = (total: number, keys: readonly string[] = all) => {
+    const base = Math.floor(total / keys.length);
+    const extra = total - base * keys.length;
+    return keys.map((k, i) => ({ k, amount: base + (i < extra ? 1 : 0) }));
+  };
+  const exact = (amounts: Record<string, number>) => Object.entries(amounts).map(([k, amount]) => ({ k, amount }));
+
+  await prisma.settlement.deleteMany({ where: { houseId } });
+  // Xóa scan trước: khóa ngoại expenseId là SetNull nên scan cũ sẽ mồ côi nếu để lại khi chạy seed lần hai.
+  await prisma.receiptScan.deleteMany({ where: { houseId } });
+  await prisma.expense.deleteMany({ where: { houseId } });
+
+  const expenses = [
+    // Tháng 10 (khớp ảnh 07).
+    { title: 'Nước rửa chén & giấy', category: 'SUPPLIES', payer: 'mai', date: '2026-10-05', splitType: 'EQUAL', splits: equal(120_000) },
+    { title: 'Bình gas', category: 'OTHER', payer: 'hung', date: '2026-10-05', splitType: 'EQUAL', splits: equal(380_000) },
+    {
+      title: 'Đi chợ cuối tuần',
+      category: 'FOOD',
+      payer: 'quan',
+      date: '2026-10-04',
+      splitType: 'EXACT',
+      splits: exact({ hung: 110_000, thien: 120_000, mai: 140_000, quan: 150_000 }),
+      receiptImageUrl: SAMPLE_PROOF_URL,
+    },
+    { title: 'Wifi tháng 10', category: 'INTERNET', payer: 'quan', date: '2026-10-03', splitType: 'EQUAL', splits: equal(240_000) },
+    { title: 'Tiền nước', category: 'WATER', payer: 'thien', date: '2026-10-02', splitType: 'EQUAL', splits: equal(180_000) },
+    { title: 'Tiền điện tháng 10', category: 'ELECTRICITY', payer: 'mai', date: '2026-10-01', splitType: 'EQUAL', splits: equal(840_000) },
+    // Tháng 9: đã tất toán hết bằng 3 settlement CONFIRMED bên dưới.
+    {
+      title: 'Tiền điện tháng 9',
+      category: 'ELECTRICITY',
+      payer: 'mai',
+      date: '2026-09-27',
+      splitType: 'EXACT',
+      splits: exact({ hung: 100_000, thien: 95_000, mai: 190_000, quan: 15_000 }),
+    },
+    {
+      title: 'Wifi tháng 9',
+      category: 'INTERNET',
+      payer: 'quan',
+      date: '2026-09-26',
+      splitType: 'CUSTOM',
+      splits: equal(100_000, ['hung', 'quan']),
+    },
+  ] as const;
+
+  for (const e of expenses) {
+    const totalAmount = e.splits.reduce((sum, s) => sum + s.amount, 0);
+    const created = await prisma.expense.create({
+      data: {
+        houseId,
+        payerId: id(e.payer),
+        createdById: id(e.payer),
+        title: e.title,
+        category: e.category,
+        totalAmount,
+        splitType: e.splitType,
+        spentAt: at(e.date),
+        receiptImageUrl: 'receiptImageUrl' in e ? e.receiptImageUrl : null,
+        splits: { create: e.splits.map((s) => ({ userId: id(s.k), allocatedAmount: s.amount })) },
+      },
+    });
+    const ocr = OCR_DRAFTS[e.title];
+    if (ocr) {
+      await prisma.receiptScan.create({
+        data: {
+          houseId,
+          scannedById: id(e.payer),
+          imageUrl: 'receiptImageUrl' in e ? e.receiptImageUrl : SAMPLE_PROOF_URL,
+          status: 'USED',
+          draftJson: { ...ocr, purchasedAt: e.date, total: totalAmount, warnings: [] },
+          model: 'seed',
+          latencyMs: 2100,
+          expenseId: created.id,
+        },
+      });
+    }
+  }
+
+  const settlements = [
+    { from: 'quan', to: 'hung', amount: 60_000, status: 'CONFIRMED', date: '2026-09-28' },
+    { from: 'thien', to: 'quan', amount: 95_000, status: 'CONFIRMED', date: '2026-09-29', proofUrl: SAMPLE_PROOF_URL },
+    { from: 'hung', to: 'mai', amount: 210_000, status: 'CONFIRMED', date: '2026-09-30' },
+    { from: 'thien', to: 'mai', amount: 380_000, status: 'PENDING', date: '2026-10-06', proofUrl: SAMPLE_PROOF_URL },
+  ] as const;
+
+  for (const s of settlements) {
+    const createdAt = at(s.date);
+    await prisma.settlement.create({
+      data: {
+        houseId,
+        fromUserId: id(s.from),
+        toUserId: id(s.to),
+        amount: s.amount,
+        status: s.status,
+        proofUrl: 'proofUrl' in s ? s.proofUrl : null,
+        createdAt,
+        confirmedAt: s.status === 'CONFIRMED' ? createdAt : null,
+      },
+    });
+  }
+}
+
+/**
+ * Chat Trợ lý + nhắc nhở demo cho Hùng (màn 19): thread "WC có mùi" với trả lời có 3 nút hành
+ * động (nút tạo nhắc đã bấm nên nhắc ASSISTANT 20:00 hôm nay xuất hiện ở panel với chip
+ * "Từ trợ lý"), 1 nhắc USER thứ Sáu và 1 nhắc SYSTEM thứ Bảy (chỉ sửa được, D12). Xóa dữ liệu
+ * chat + nhắc của nhà demo trước khi tạo nên chạy lại được.
+ */
+async function seedAssistantReminders(houseId: string, users: Record<string, { id: string }>) {
+  const hung = users.hung.id;
+
+  await prisma.assistantMessage.deleteMany({ where: { houseId } });
+  await prisma.reminder.deleteMany({ where: { houseId } });
+
+  const threadId = crypto.randomUUID();
+  const today = vnToday();
+  const minutes = (iso: string, hhmm: string) => new Date(`${iso}T${hhmm}:00+07:00`);
+
+  await prisma.assistantMessage.create({
+    data: {
+      userId: hung,
+      houseId,
+      threadId,
+      role: 'USER',
+      content: 'WC phòng mình có mùi hôi quá, xử lý sao?',
+      createdAt: minutes(today, '19:02'),
+    },
+  });
+
+  const actions = [
+    {
+      type: 'CREATE_ADHOC_TASK',
+      label: 'Việc đột xuất: Cọ WC (vòng quay)',
+      payload: { title: 'Cọ WC (vòng quay)' },
+    },
+    {
+      type: 'DRAFT_EXPENSE',
+      label: 'Ghi khoản mua: Viên tây bồn cầu ~35.000đ',
+      payload: { title: 'Viên tây bồn cầu', estimatedAmount: 35_000 },
+    },
+    {
+      type: 'CREATE_REMINDER',
+      label: 'Nhắc mình tối nay 20:00',
+      payload: { title: 'Thả viên tây bồn cầu, dễ qua đêm', remindAt: `${today}T20:00:00+07:00` },
+    },
+  ];
+  const assistantReply = await prisma.assistantMessage.create({
+    data: {
+      userId: hung,
+      houseId,
+      threadId,
+      role: 'ASSISTANT',
+      content:
+        'Mùi WC thường do ống thoát sàn bị khô hoặc cặn trong bồn cầu. Thử theo thứ tự:\n' +
+        '1. Đổ 1 ca nước vào ống thoát sàn để tạo nút nước chắn mùi.\n' +
+        '2. Thả viên tẩy bồn cầu, để qua đêm rồi cọ lại.\n' +
+        '3. Bật quạt hút 15 phút sau khi tắm.\n' +
+        'Sau 2 ngày vẫn còn mùi thì nên báo chủ trọ kiểm tra ống thông hơi.',
+      category: 'INCIDENT',
+      actionsJson: actions,
+      createdAt: new Date(minutes(today, '19:02').getTime() + 30_000),
+    },
+  });
+
+  await prisma.assistantMessage.create({
+    data: {
+      userId: hung,
+      houseId,
+      threadId,
+      role: 'USER',
+      content: 'Nói sao để bạn bớt ồn sau 11h mà không mất lòng?',
+      createdAt: minutes(today, '19:10'),
+    },
+  });
+
+  await prisma.assistantMessage.create({
+    data: {
+      userId: hung,
+      houseId,
+      threadId,
+      role: 'ASSISTANT',
+      content:
+        'Nội quy nhà điều 1 ghi "giữ yên lặng sau 23:00", nên bạn có thể nhắc nhẹ dựa vào đó. Ví dụ: ' +
+        '"Tuần này mình thi, sau 11h mọi người đeo tai nghe giúp mình nha, cảm ơn nhiều!" ' +
+        'Nói trực tiếp kịp lúc hài hước sẽ dễ nghe hơn nhắn trong nhóm.',
+      category: 'EMOTIONAL',
+      createdAt: new Date(minutes(today, '19:10').getTime() + 40_000),
+    },
+  });
+
+  // 3 nhắc của Hùng ở panel (ảnh 19). Nhắc ASSISTANT gắn dedupeKey đúng nút thứ 3 của tin trả
+  // lời nên nút đó trong chat hiện trạng thái "đã bấm". SYSTEM chỉ sửa được, không xóa (D12).
+  await prisma.reminder.create({
+    data: {
+      userId: hung,
+      houseId,
+      title: 'Thả viên tây bồn cầu, dễ qua đêm',
+      remindAt: minutes(today, '20:00'),
+      source: 'ASSISTANT',
+      dedupeKey: `msg:${assistantReply.id}:2`,
+    },
+  });
+  await prisma.reminder.create({
+    data: {
+      userId: hung,
+      houseId,
+      title: 'Đóng tiền nhà cho chủ trọ',
+      remindAt: minutes(vnNextWeekday(5), '19:00'),
+      source: 'USER',
+    },
+  });
+  await prisma.reminder.create({
+    data: {
+      userId: hung,
+      houseId,
+      title: 'Nhắc ca rửa chén buổi tối của bạn',
+      remindAt: minutes(vnNextWeekday(6), '08:00'),
+      source: 'SYSTEM',
+    },
+  });
+
+  // Hùng đã đồng ý gửi chat cho Gemini (D5) nên demo chat được ngay, không dừng ở hộp thoại.
+  await prisma.user.update({
+    where: { id: hung },
+    data: { assistantConsentAt: new Date() },
+  });
+}
+
 async function main() {
   const started = Date.now();
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
@@ -479,6 +758,8 @@ async function main() {
   await seedChores(house.id, users);
   const activities = await seedRealtime(house.id, users);
   await seedSwaps(house.id, users);
+  await seedExpenses(house.id, users);
+  await seedAssistantReminders(house.id, users);
 
   console.log(
     `Seed xong trong ${Date.now() - started}ms: ${house.name} (mã ${INVITE_CODE}), ` +

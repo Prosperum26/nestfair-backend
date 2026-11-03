@@ -10,6 +10,10 @@ export type ChoreEvent =
   | 'chore:missed'
   | 'chore:reassigned'
   | 'chore:cancelled';
+/** Sổ chi: `expense:new` theo đặc tả; sửa/xóa để client tải lại. */
+export type ExpenseEvent = 'expense:new' | 'expense:updated' | 'expense:deleted';
+/** Tất toán: `debt:settled` theo đặc tả (chủ nợ xác nhận); báo chuyển / hủy để client tải lại. */
+export type SettlementEvent = 'settlement:requested' | 'settlement:cancelled' | 'debt:settled';
 export type WheelEvent = 'wheel:spinning' | 'wheel:result' | 'wheel:voided';
 export type SwapEvent =
   | 'swap:requested'
@@ -25,6 +29,8 @@ export type DebtEvent =
   | 'chore_debt:forgiven';
 export type RealtimeEvent =
   | ChoreEvent
+  | ExpenseEvent
+  | SettlementEvent
   | WheelEvent
   | SwapEvent
   | DebtEvent
