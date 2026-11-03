@@ -237,7 +237,13 @@ và tắt được bất cứ lúc nào. Điều khoản của gói free của G
 phần chênh giữa `totalAmount` và tổng các món (giảm giá, phí) được chia **theo tỷ lệ tiền món của từng người**, dùng BigInt vì tích có thể vượt 2^53;
 phần dư chia 1đ từ người vào nhà sớm nhất, nên Σ phần chia luôn bằng `totalAmount`. Ví dụ: tổng 100.000đ, món 60.000đ (a, b, c) và món 50.000đ (a) → a 63.636đ, b 18.182đ, c 18.182đ.
 Gửi `receiptScanId` để gắn bản nháp: kiểm tra cùng nhà và chưa dùng, đánh dấu `USED` trong cùng transaction nên bấm lưu đúp chỉ ra một khoản chi (`409 RECEIPT_SCAN_USED`);
-scan của nhà khác hoặc không có thì `404`. Khoản `ITEMIZED` không lưu danh sách món: sửa tiền hoặc kiểu chia phải gửi lại `items`. `PATCH` không nhận `receiptScanId`.
+scan của nhà khác hoặc không có thì `404`. Khoản `ITEMIZED` đổi tiền hoặc kiểu chia phải gửi lại `items` để chia lại. `PATCH` không nhận `receiptScanId`.
+
+**Danh sách món (lưu để xem lại).** `items: [{ name, lineTotal, userIds }]` (tối đa 100 món) được lưu ở cột JSON `Expense.items` với **mọi kiểu chia**, không chỉ `ITEMIZED`;
+`GET` chi tiết và danh sách đều trả `items` (mảng rỗng nếu khoản không có, kể cả khoản cũ). `userIds` chỉ có nghĩa với `ITEMIZED` (bắt buộc ít nhất một người mỗi món); kiểu chia khác bỏ qua và lưu `[]`.
+Danh sách món **không** đi vào phép tính: phần chia và số dư vẫn tính như cũ, và không ép tổng món bằng tổng hóa đơn (giảm giá, phí làm lệch). `ITEMIZED` có `items` rỗng hoặc món không người dùng trả `400 ITEMS_INVALID`.
+`PATCH`: gửi `items` thì thay toàn bộ (`[]` = xóa); không gửi thì giữ nguyên; đổi khỏi `ITEMIZED` mà không gửi `items` thì giữ tên và tiền, xóa `userIds`.
+Giới hạn: khoản lưu trước khi có tính năng không có danh sách món; chưa có API sửa từng món (chỉ thay cả danh sách); `items` là JSON nên chưa truy vấn được theo món xuyên khoản chi.
 
 **Giới hạn đã biết.** Refresh trang xác nhận thì mất bản nháp phía client (chưa có API đọc lại); ảnh của scan không được dùng chưa có job dọn.
 

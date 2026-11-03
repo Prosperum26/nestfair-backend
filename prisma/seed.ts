@@ -256,6 +256,7 @@ async function seedExpenses(houseId: string, users: Record<string, { id: string 
 
   for (const e of expenses) {
     const totalAmount = e.splits.reduce((sum, s) => sum + s.amount, 0);
+    const ocr = OCR_DRAFTS[e.title];
     const created = await prisma.expense.create({
       data: {
         houseId,
@@ -267,10 +268,11 @@ async function seedExpenses(houseId: string, users: Record<string, { id: string 
         splitType: e.splitType,
         spentAt: at(e.date),
         receiptImageUrl: 'receiptImageUrl' in e ? e.receiptImageUrl : null,
+        // Khoản từ OCR giữ danh sách món để xem lại (chia kiểu khác nên userIds rỗng).
+        items: ocr ? ocr.items.map((i) => ({ name: i.name, lineTotal: i.lineTotal, userIds: [] })) : undefined,
         splits: { create: e.splits.map((s) => ({ userId: id(s.k), allocatedAmount: s.amount })) },
       },
     });
-    const ocr = OCR_DRAFTS[e.title];
     if (ocr) {
       await prisma.receiptScan.create({
         data: {
