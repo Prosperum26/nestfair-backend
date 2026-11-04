@@ -117,6 +117,20 @@ Hai khoản chi ("Đi chợ cuối tuần", "Nước rửa chén & giấy") có 
 
 Check-in việc nhà, ảnh hóa đơn và bill chuyển khoản cần ảnh. Điền `CLOUDINARY_URL=cloudinary://<api_key>:<api_secret>@<cloud_name>` vào `.env` (Cloudinary Dashboard → API Keys → "API Environment variable"), hoặc 3 biến tách rời `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` (ưu tiên hơn URL nếu có cả hai). Chưa điền thì `POST /assignments/:id/checkin` trả `503`.
 
+## Hồ sơ người dùng
+
+Mọi route cần JWT, chỉ tác động lên chính người đang đăng nhập (không nhận `userId` từ client).
+
+| Method | Path | Ghi chú |
+| :--- | :--- | :--- |
+| GET / PATCH | `/users/me` | Họ tên, SĐT, ngân hàng (`bankBin`) + STK. `null` xóa SĐT hoặc cả cặp ngân hàng + STK; lệch cặp trả 400. |
+| POST | `/users/me/avatar` | multipart field `avatar` (JPG/PNG/WEBP, tối đa 5MB, kiểm tra magic bytes) lên Cloudinary `users/<id>/avatar`. Lưu URL mới rồi mới xóa ảnh cũ; ảnh cũ không thuộc Cloudinary (vd. ảnh Google) thì giữ nguyên. Thiếu file: 400 `AVATAR_REQUIRED`. |
+| DELETE | `/users/me/avatar` | Xóa URL và ảnh trên Cloudinary; chưa có avatar vẫn 200. |
+| PATCH | `/users/me/notifications` | `{ expenseCreated?, choreDigest?, debtPaid? }`, khóa không gửi giữ nguyên. Cột `User.notificationPrefs` (JSON), `null` = chưa chỉnh = bật hết. |
+| POST | `/auth/change-password` | `{ currentPassword, newPassword }` → 204. Thu hồi mọi refresh token khác, giữ phiên hiện tại (đọc cookie `nf_rt`). Lỗi mật khẩu trả **400** (`WRONG_PASSWORD`, `SAME_PASSWORD`, `PASSWORD_NOT_SET` cho tài khoản chỉ có Google) chứ không 401, để client không nhầm với phiên hết hạn. |
+
+Hiện chỉ `choreDigest` có tác dụng: bản tin việc nhà 08:00 (`ChoreTodayDigestSource`) bỏ qua người đã tắt. `expenseCreated` và `debtPaid` mới được lưu, chưa có nơi gửi thông báo riêng nên giao diện hiện "Sắp có".
+
 ## Việc nhà (Issue #4 v2)
 
 Đặc tả: lịch theo **ngày**, hai chế độ xoay, rào nới dần, check-in có cửa sổ và ân hạn, duyệt chéo, vắng mặt / nghỉ cả nhà.

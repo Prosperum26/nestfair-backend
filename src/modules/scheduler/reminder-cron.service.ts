@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { dateOf } from '../chores/schedule-context.js';
 import { type DateStr, dueAtOf, toDateStr } from '../chores/week.js';
 import { EventsService } from '../events/events.service.js';
+import { resolveNotificationPrefs } from '../users/notification-prefs.js';
 
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
 const VN_OFFSET_MS = 7 * 3_600_000;
@@ -40,6 +41,9 @@ export class ChoreTodayDigestSource implements DigestSource {
   constructor(private readonly prisma: PrismaService) {}
 
   async linesFor(userId: string, houseId: string, day: DateStr): Promise<string[]> {
+    // Người dùng tắt "bản tin việc nhà" ở Hồ sơ thì không báo ca nào.
+    const owner = await this.prisma.user.findUnique({ where: { id: userId }, select: { notificationPrefs: true } });
+    if (!resolveNotificationPrefs(owner?.notificationPrefs).choreDigest) return [];
     const shifts = await this.prisma.choreAssignment.findMany({
       where: { houseId, assignee: { userId, leftAt: null }, status: 'TODO', occurrenceDate: dateOf(day) },
       orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
