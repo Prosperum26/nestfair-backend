@@ -184,4 +184,48 @@ describe('Users (e2e)', () => {
       await as(token).consent(body).expect(400);
     });
   });
+
+  describe('PATCH /users/me/notifications', () => {
+    const notify = (t: string, body: object) =>
+      request(app.getHttpServer()).patch('/api/v1/users/me/notifications').set('Authorization', `Bearer ${t}`).send(body);
+
+    it('chưa chỉnh thì notificationPrefs null; chỉ khóa gửi mới đổi, khóa khác giữ nguyên', async () => {
+      const me = await request(app.getHttpServer()).get('/api/v1/users/me').set('Authorization', `Bearer ${token}`).expect(200);
+      expect(me.body.notificationPrefs).toBeNull();
+
+      const first = await notify(token, { choreDigest: false }).expect(200);
+      expect(first.body.notificationPrefs).toEqual({ expenseCreated: true, choreDigest: false, debtPaid: true });
+      const second = await notify(token, { debtPaid: false }).expect(200);
+      expect(second.body.notificationPrefs).toEqual({ expenseCreated: true, choreDigest: false, debtPaid: false });
+    });
+
+    it.each([
+      ['giá trị là chuỗi', { choreDigest: 'no' }],
+      ['khóa lạ', { marketing: true }],
+    ])('%s thì 400', async (_, body) => {
+      await notify(token, body).expect(400);
+    });
+  });
+
+  describe('avatar', () => {
+    const upload = (t: string) => request(app.getHttpServer()).post('/api/v1/users/me/avatar').set('Authorization', `Bearer ${t}`);
+
+    it('thiếu file thì 400 AVATAR_REQUIRED', async () => {
+      const res = await upload(token).expect(400);
+      expect(res.body.code).toBe('AVATAR_REQUIRED');
+    });
+
+    it('file không phải ảnh jpeg/png/webp thì 415', async () => {
+      await upload(token).attach('avatar', Buffer.from('GIF89a....'), { filename: 'a.gif', contentType: 'image/gif' }).expect(415);
+    });
+
+    it('xóa khi chưa có avatar vẫn 200', async () => {
+      const res = await request(app.getHttpServer()).delete('/api/v1/users/me/avatar').set('Authorization', `Bearer ${token}`).expect(200);
+      expect(res.body.avatarUrl).toBeNull();
+    });
+
+    it('cần JWT', async () => {
+      await request(app.getHttpServer()).post('/api/v1/users/me/avatar').expect(401);
+    });
+  });
 });

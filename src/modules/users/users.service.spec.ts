@@ -34,7 +34,7 @@ describe('UsersService', () => {
           .mockImplementation(({ data }) => ({ ...current, ...data })),
       },
     };
-    service = new UsersService(prisma as unknown as PrismaService);
+    service = new UsersService(prisma as unknown as PrismaService, {} as never);
   });
 
   it('getMe: user không còn tồn tại thì 401', async () => {

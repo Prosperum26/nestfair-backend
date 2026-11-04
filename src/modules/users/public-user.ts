@@ -14,6 +14,7 @@ export const publicUserSelect = {
   avatarUrl: true,
   ocrConsentAt: true,
   assistantConsentAt: true,
+  notificationPrefs: true,
   createdAt: true,
 } satisfies Prisma.UserSelect;
 

@@ -32,6 +32,8 @@ model User {
   ocrConsentAt DateTime?
   /// Lúc người dùng đồng ý gửi tin nhắn tới Trợ lý AI (Gemini). Null = chưa đồng ý (chặn chat). Riêng biệt với ocrConsentAt (D5).
   assistantConsentAt DateTime?
+  /// Công tắc thông báo { expenseCreated, choreDigest, debtPaid }. Null = chưa chỉnh = bật hết.
+  notificationPrefs Json?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
