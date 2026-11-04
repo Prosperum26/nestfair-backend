@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -27,6 +28,7 @@ import { CurrentMembership } from './decorators/current-membership.decorator.js'
 import { CreateHouseDto } from './dto/create-house.dto.js';
 import { HouseDetailDto, HouseSummaryDto } from './dto/house-response.dto.js';
 import { JoinHouseDto } from './dto/join-house.dto.js';
+import { UpdateHouseDto } from './dto/update-house.dto.js';
 import {
   type HouseMembership,
   HouseMemberGuard,
@@ -87,6 +89,25 @@ export class HousesController {
     @CurrentMembership() membership: HouseMembership,
   ): Promise<HouseDetailDto> {
     return this.houses.detail(membership.houseId, membership.role);
+  }
+
+  @Patch(':houseId')
+  @HouseRoles('ADMIN')
+  @UseGuards(HouseMemberGuard, HouseRolesGuard)
+  @ApiParam({ name: 'houseId', format: 'uuid' })
+  @ApiOperation({
+    summary: 'Trưởng phòng sửa tên, địa chỉ, số người tối đa, nội quy',
+  })
+  @ApiOkResponse({ type: HouseDetailDto })
+  @ApiBadRequestResponse({
+    description: 'Dữ liệu không hợp lệ, hoặc số người tối đa thấp hơn số người đang ở',
+  })
+  @ApiForbiddenResponse({ description: 'Không phải trưởng phòng của nhà này' })
+  update(
+    @CurrentMembership() membership: HouseMembership,
+    @Body() dto: UpdateHouseDto,
+  ): Promise<HouseDetailDto> {
+    return this.houses.update(membership.houseId, dto);
   }
 
   @Post(':houseId/invite-code')

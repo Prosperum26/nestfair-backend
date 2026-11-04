@@ -39,6 +39,8 @@ describe('Houses (e2e)', () => {
       http().get(path).set('Authorization', `Bearer ${token}`),
     post: (path: string, body?: object) =>
       http().post(path).set('Authorization', `Bearer ${token}`).send(body),
+    patch: (path: string, body?: object) =>
+      http().patch(path).set('Authorization', `Bearer ${token}`).send(body),
   });
 
   async function createHouse(token: string, over: object = {}) {
@@ -391,6 +393,100 @@ describe('Houses (e2e)', () => {
       await as(hung.token)
         .get('/api/v1/houses/00000000-0000-4000-8000-000000000000')
         .expect(403);
+    });
+  });
+
+  describe('PATCH /houses/:houseId', () => {
+    it('trưởng phòng sửa tên, địa chỉ, số người tối đa, nội quy; chuỗi rỗng xóa địa chỉ và nội quy', async () => {
+      const hung = await user('Hùng');
+      const house = await createHouse(hung.token, { address: 'Hẻm 51' });
+
+      const res = await as(hung.token)
+        .patch(`/api/v1/houses/${house.id}`, {
+          name: '  Nhà 12B ',
+          maxMembers: 6,
+          rules: ' 1. Giữ yên lặng sau 23h\n2. Rửa chén ngay ',
+        })
+        .expect(200);
+      expect(res.body).toMatchObject({
+        name: 'Nhà 12B',
+        maxMembers: 6,
+        rules: '1. Giữ yên lặng sau 23h\n2. Rửa chén ngay',
+        address: 'Hẻm 51',
+      });
+
+      const cleared = await as(hung.token)
+        .patch(`/api/v1/houses/${house.id}`, { address: '', rules: '' })
+        .expect(200);
+      expect(cleared.body.address).toBeNull();
+      expect(cleared.body.rules).toBeNull();
+      expect(cleared.body.name).toBe('Nhà 12B');
+    });
+
+    it('thành viên thường thì 403, dữ liệu không đổi', async () => {
+      const hung = await user('Hùng');
+      const thien = await user('Thiện');
+      const house = await createHouse(hung.token);
+      await as(thien.token)
+        .post('/api/v1/houses/join', { inviteCode: house.inviteCode })
+        .expect(200);
+
+      await as(thien.token)
+        .patch(`/api/v1/houses/${house.id}`, { name: 'Nhà của Thiện' })
+        .expect(403);
+      const row = await prisma.house.findUniqueOrThrow({ where: { id: house.id } });
+      expect(row.name).toBe('Nhà 12A');
+    });
+
+    it('trưởng phòng nhà khác thì 403 (chống IDOR)', async () => {
+      const hung = await user('Hùng');
+      const quan = await user('Quân');
+      await createHouse(hung.token);
+      const houseB = await createHouse(quan.token, { name: 'Nhà B' });
+
+      await as(hung.token)
+        .patch(`/api/v1/houses/${houseB.id}`, { name: 'Bị chiếm' })
+        .expect(403);
+    });
+
+    it('số người tối đa thấp hơn số người đang ở thì 400', async () => {
+      const hung = await user('Hùng');
+      const thien = await user('Thiện');
+      const mai = await user('Mai');
+      const house = await createHouse(hung.token);
+      for (const u of [thien, mai]) {
+        await as(u.token)
+          .post('/api/v1/houses/join', { inviteCode: house.inviteCode })
+          .expect(200);
+      }
+
+      const res = await as(hung.token)
+        .patch(`/api/v1/houses/${house.id}`, { maxMembers: 2 })
+        .expect(400);
+      expect(res.body.message).toMatch(/đang có 3 người/);
+      await as(hung.token)
+        .patch(`/api/v1/houses/${house.id}`, { maxMembers: 3 })
+        .expect(200);
+    });
+
+    it.each([
+      ['tên quá ngắn', { name: 'A' }],
+      ['quá 10 người', { maxMembers: 11 }],
+      ['nội quy quá 1000 ký tự', { rules: 'a'.repeat(1001) }],
+      ['trường lạ', { inviteCode: 'AAAAAA' }],
+    ])('%s thì 400', async (_, body) => {
+      const hung = await user('Hùng');
+      const house = await createHouse(hung.token);
+      await as(hung.token).patch(`/api/v1/houses/${house.id}`, body).expect(400);
+    });
+
+    it('body rỗng thì không đổi gì', async () => {
+      const hung = await user('Hùng');
+      const house = await createHouse(hung.token);
+      const res = await as(hung.token)
+        .patch(`/api/v1/houses/${house.id}`, {})
+        .expect(200);
+      expect(res.body).toMatchObject({ name: 'Nhà 12A', maxMembers: 4 });
     });
   });
 
