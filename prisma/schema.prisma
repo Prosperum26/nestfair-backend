@@ -47,6 +47,7 @@ model User {
   settlementsSent     Settlement[]   @relation("SettlementFrom")
   settlementsReceived Settlement[]   @relation("SettlementTo")
   receiptScans        ReceiptScan[]
+  ruleProposals       RuleProposal[]
   assistantMessages   AssistantMessage[]
   reminders           Reminder[]
 
@@ -109,6 +110,7 @@ model House {
   receiptScans  ReceiptScan[]
   assistantMessages AssistantMessage[]
   reminders Reminder[]
+  ruleProposals RuleProposal[]
 
   @@map("houses")
 }
@@ -134,6 +136,44 @@ model HouseMember {
   @@index([houseId])
   @@index([userId])
   @@map("house_members")
+}
+
+enum RuleProposalKind {
+  ADD
+  EDIT
+  REMOVE
+}
+
+enum RuleProposalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  /// Người đề xuất tự rút lại.
+  WITHDRAWN
+}
+
+/// Thành viên đề xuất thêm / sửa / bỏ một điều nội quy; trưởng phòng duyệt thì tự áp vào House.rules.
+model RuleProposal {
+  id           String             @id @default(uuid()) @db.Uuid
+  houseId      String             @db.Uuid
+  proposerId   String             @db.Uuid
+  kind         RuleProposalKind
+  /// EDIT / REMOVE: nguyên văn điều đang có lúc đề xuất (đã bỏ số thứ tự). Duyệt mà không còn thì 409.
+  targetText   String?
+  /// ADD / EDIT: nội dung mới.
+  content      String?
+  reason       String?
+  status       RuleProposalStatus @default(PENDING)
+  decidedById  String?            @db.Uuid
+  decidedAt    DateTime?
+  rejectReason String?
+  createdAt    DateTime           @default(now())
+
+  house    House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  proposer User  @relation(fields: [proposerId], references: [id], onDelete: Cascade)
+
+  @@index([houseId, status, createdAt])
+  @@map("rule_proposals")
 }
 
 enum ChoreFrequency {
