@@ -39,6 +39,7 @@ import {
   AuthResponseDto,
   PublicUserDto,
 } from './dto/auth-response.dto.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 import {
@@ -120,6 +121,27 @@ export class AuthController {
     res.clearCookie(REFRESH_COOKIE, this.cookieOptions());
     // Ngắt socket đang mở của user để không giữ room của phiên cũ (thiết bị khác tự làm mới phiên rồi nối lại).
     if (userId) this.events.disconnectUser(userId);
+  }
+
+  @Post('change-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiCookieAuth(REFRESH_COOKIE)
+  @ApiOperation({
+    summary: 'Đổi mật khẩu; thu hồi các phiên đăng nhập khác, giữ phiên hiện tại',
+  })
+  @ApiNoContentResponse()
+  @ApiBadRequestResponse({
+    description: 'WRONG_PASSWORD, SAME_PASSWORD, PASSWORD_NOT_SET (tài khoản Google) hoặc mật khẩu mới không đủ mạnh',
+  })
+  @ApiUnauthorizedResponse()
+  async changePassword(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: ChangePasswordDto,
+    @Req() req: Request,
+  ): Promise<void> {
+    await this.auth.changePassword(user.id, dto, this.readCookie(req));
   }
 
   @Get('me')
