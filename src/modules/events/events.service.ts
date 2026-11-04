@@ -42,6 +42,8 @@ export type RealtimeEvent =
   | 'presence:update'
   | 'member:joined'
   | 'member:left'
+  | 'rule_proposal:created'
+  | 'rule_proposal:decided'
   | 'session:expired'
   | 'reminder:due';
 
