@@ -73,9 +73,9 @@ describe('Listing auto-close on join (e2e)', () => {
   async function listen(token: string, houseId: string) {
     const socket = await connect(token);
     const received: unknown[] = [];
-    socket.on('listing:closed', (payload) => received.push(payload));
+    socket.on('listing:closed', (envelope: { payload: unknown }) => received.push(envelope.payload));
     const ack = (await socket.timeout(3000).emitWithAck('house:join_room', { houseId })) as { ok: boolean };
-    expect(ack).toEqual({ ok: true });
+    expect(ack).toMatchObject({ ok: true });
     return received;
   }
   const settle = () => new Promise((resolve) => setTimeout(resolve, 300));

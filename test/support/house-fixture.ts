@@ -66,6 +66,17 @@ export async function createFixture(
   }
 
   async function cleanup() {
+    // Bảng đổi ca không có khóa ngoại tới nhà / ca nên xóa nhà không kéo theo chúng: dọn theo đúng các nhà của file
+    // test này (không xóa toàn bảng, vì các file e2e chạy song song).
+    const houses = await prisma.house.findMany({ where: { members: { some: { user: { email: { endsWith: domain } } } } }, select: { id: true } });
+    const houseIds = houses.map((h) => h.id);
+    if (houseIds.length) {
+      const slots = await prisma.choreAssignment.findMany({ where: { houseId: { in: houseIds } }, select: { id: true } });
+      await prisma.swapLock.deleteMany({ where: { assignmentId: { in: slots.map((a) => a.id) } } });
+      await prisma.choreSwapRequest.deleteMany({ where: { houseId: { in: houseIds } } });
+      await prisma.choreDebt.deleteMany({ where: { houseId: { in: houseIds } } });
+      await prisma.rotationSwap.deleteMany({ where: { houseId: { in: houseIds } } });
+    }
     await prisma.house.deleteMany({
       where: { members: { some: { user: { email: { endsWith: domain } } } } },
     });

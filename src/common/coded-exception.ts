@@ -7,6 +7,7 @@ const STATUS_NAMES: Record<number, string> = {
   403: 'Forbidden',
   404: 'Not Found',
   409: 'Conflict',
+  410: 'Gone',
   413: 'Payload Too Large',
   415: 'Unsupported Media Type',
   422: 'Unprocessable Entity',
@@ -24,7 +25,8 @@ export function coded(
   status: HttpStatus,
   code: string,
   message: string,
-  extra?: Record<string, unknown>,
+  /** Trường thêm cho client (vd. `retryAfterMs`), không đè các trường chuẩn. */
+  extra: Record<string, unknown> = {},
 ): HttpException {
   return new HttpException(
     { ...extra, statusCode: status, message, error: STATUS_NAMES[status] ?? 'Error', code },

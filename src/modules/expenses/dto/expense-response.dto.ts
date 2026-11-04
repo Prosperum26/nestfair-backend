@@ -14,6 +14,12 @@ export class ExpenseShareDto {
   @ApiProperty({ description: 'Số nguyên VNĐ' }) amount: number;
 }
 
+export class ExpenseItemDto {
+  @ApiProperty() name: string;
+  @ApiProperty({ description: 'Thành tiền của dòng, số nguyên VNĐ' }) lineTotal: number;
+  @ApiProperty({ type: [String], format: 'uuid', description: 'Người dùng món (chỉ khoản chia theo món); rỗng nếu không' }) userIds: string[];
+}
+
 export class ExpenseDto {
   @ApiProperty({ format: 'uuid' }) id: string;
   @ApiProperty() title: string;
@@ -28,6 +34,7 @@ export class ExpenseDto {
   @ApiProperty() createdAt: Date;
   @ApiProperty() updatedAt: Date;
   @ApiProperty({ type: [ExpenseShareDto] }) splits: ExpenseShareDto[];
+  @ApiProperty({ type: [ExpenseItemDto], description: 'Danh sách món của hóa đơn (rỗng nếu khoản không có)' }) items: ExpenseItemDto[];
   @ApiProperty({ description: 'Phần của người đang xem (0 nếu không chịu phần nào)' }) myShare: number;
   @ApiProperty({ description: 'Người trả, người ghi hoặc trưởng phòng mới được sửa/xóa' }) canEdit: boolean;
 }

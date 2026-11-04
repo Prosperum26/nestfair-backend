@@ -2,6 +2,8 @@
 // Issue #3: User, RefreshToken, House, HouseMember.
 // Issue chores: Chore, ChoreAssignment.
 // Issue #9: Expense, ExpenseSplit, Settlement.
+// Issue #11: ReceiptScan (OCR hóa đơn), User.ocrConsentAt.
+// Issue #12: AssistantMessage, Reminder, User.assistantConsentAt.
 
 generator client {
   provider            = "prisma-client"
@@ -15,19 +17,25 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(uuid()) @db.Uuid
-  email        String   @unique
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique
   /// Null khi tài khoản chỉ đăng nhập bằng Google.
   passwordHash String?
-  googleId     String?  @unique
+  googleId     String?   @unique
   fullName     String
   phone        String?
   /// Mã BIN 6 số của ngân hàng (Napas), dùng cho VietQR.
   bankBin      String?
   bankAccount  String?
   avatarUrl    String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  /// Lúc người dùng đồng ý gửi ảnh hóa đơn tới Google Gemini. Null = chưa đồng ý (chặn quét OCR).
+  ocrConsentAt DateTime?
+  /// Lúc người dùng đồng ý gửi tin nhắn tới Trợ lý AI (Gemini). Null = chưa đồng ý (chặn chat). Riêng biệt với ocrConsentAt (D5).
+  assistantConsentAt DateTime?
+  /// Công tắc thông báo { expenseCreated, choreDigest, debtPaid }. Null = chưa chỉnh = bật hết.
+  notificationPrefs Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   refreshTokens RefreshToken[]
   memberships   HouseMember[]
@@ -38,6 +46,9 @@ model User {
   expenseSplits       ExpenseSplit[]
   settlementsSent     Settlement[]   @relation("SettlementFrom")
   settlementsReceived Settlement[]   @relation("SettlementTo")
+  receiptScans        ReceiptScan[]
+  assistantMessages   AssistantMessage[]
+  reminders           Reminder[]
 
   @@map("users")
 }
@@ -90,9 +101,14 @@ model House {
   absences      MemberAbsence[]
   breaks        HouseBreak[]
   auditLogs     ChoreAuditLog[]
+  activities    HouseActivity[]
+  wheelLogs     LuckyWheelLog[]
   expenses      Expense[]
   settlements   Settlement[]
   listing       RoomListing?
+  receiptScans  ReceiptScan[]
+  assistantMessages AssistantMessage[]
+  reminders Reminder[]
 
   @@map("houses")
 }
@@ -189,6 +205,8 @@ model Chore {
   occurrenceGap  Int            @default(1)
   /// false = soft-delete, không xóa vật lý.
   isActive       Boolean        @default(true)
+  /// Việc hệ thống, không hiện ở trang cài đặt, không vào lịch xoay. Hiện chỉ dùng cho "Việc đột xuất" của Lucky Wheel.
+  isSystem       Boolean        @default(false)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -262,6 +280,10 @@ model ChoreAssignment {
   disputed           Boolean          @default(false)
   /// Idempotency-Key của lần check-in gần nhất.
   checkinKey         String?
+  /// Khóa lạc quan, tăng khi đổi người hoặc đổi trạng thái (Issue #7).
+  version            Int              @default(0)
+  /// Yêu cầu đổi ca đã tạo ra `source` hiện tại, để truy vết (Issue #7).
+  swapRequestId      String?          @db.Uuid
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
@@ -271,6 +293,8 @@ model ChoreAssignment {
   assignee         HouseMember?  @relation("AssignmentAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
   originalAssignee HouseMember?  @relation("AssignmentOriginalAssignee", fields: [originalAssigneeId], references: [id], onDelete: Restrict)
   verifiedBy       HouseMember?  @relation("AssignmentVerifier", fields: [verifiedById], references: [id], onDelete: Restrict)
+  /// Có khi ca sinh ra từ Lucky Wheel (source = WHEEL).
+  wheelLog         LuckyWheelLog?
 
   @@unique([choreId, occurrenceDate, slotIndex])
   @@index([houseId, weekStart])
@@ -331,6 +355,227 @@ model ChoreAuditLog {
   @@map("chore_audit_logs")
 }
 
+enum ActivityVisibility {
+  HOUSE
+  ADMIN_ONLY
+}
+
+/// Bảng tin hoạt động của nhà (Live Ticker). Ghi cùng transaction với nghiệp vụ, giữ 30 ngày.
+model HouseActivity {
+  id          String             @id @default(uuid()) @db.Uuid
+  houseId     String             @db.Uuid
+  /// 'chore.submitted', 'chore.verified', 'wheel.result', 'swap.accepted', ...
+  type        String
+  actorUserId String?            @db.Uuid
+  /// Tên chụp lúc xảy ra (người đã rời nhà vẫn hiện đúng).
+  actorName   String
+  /// Tham số để client ghép câu: choreTitle, targetName, count, weekKey, participantNames...
+  params      Json
+  visibility  ActivityVisibility @default(HOUSE)
+  /// Chống ghi hai lần cho cùng một sự kiện (retry, idempotency).
+  dedupeKey   String?
+  createdAt   DateTime           @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+
+  @@unique([houseId, dedupeKey])
+  @@index([houseId, createdAt])
+  @@map("house_activities")
+}
+
+enum WheelStatus {
+  SPINNING
+  REVEALED
+  VOIDED
+}
+
+/// Nhật ký Lucky Wheel. Lưu userId (không phải HouseMember.id); ca tạo ra lưu assigneeId = HouseMember.id như ca thường.
+model LuckyWheelLog {
+  id             String      @id @default(uuid()) @db.Uuid
+  houseId        String      @db.Uuid
+  spunById       String      @db.Uuid
+  /// 3–60 ký tự, đã bỏ khoảng trắng thừa.
+  taskTitle      String
+  dueAt          DateTime
+  /// Người tham gia do người quay chọn (userId), theo thứ tự hiển thị.
+  participantIds String[]    @db.Uuid
+  /// Số thành viên đủ điều kiện nhưng bị bỏ khỏi vòng (để ticker minh bạch).
+  excludedCount  Int         @default(0)
+  /// Thứ tự các lát trên vòng (userId, có lặp lại), đã xáo bằng seed.
+  slices         String[]    @db.Uuid
+  selectedUserId String      @db.Uuid
+  assignmentId   String      @unique @db.Uuid
+  /// Chỉ để xáo thứ tự lát và vẽ animation. KHÔNG quyết định người trúng.
+  seed           Int
+  landingIndex   Int
+  status         WheelStatus @default(SPINNING)
+  /// Lúc bánh xe bắt đầu quay (= startAt gửi cho client).
+  spunAt         DateTime
+  durationMs     Int         @default(6000)
+  /// spunAt + durationMs
+  revealAt       DateTime
+  voidedById     String?     @db.Uuid
+  voidReason     String?
+  idempotencyKey String?
+  createdAt      DateTime    @default(now())
+
+  house      House           @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  assignment ChoreAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@unique([houseId, spunById, idempotencyKey])
+  @@index([houseId, spunAt])
+  @@index([status, revealAt])
+  @@map("lucky_wheel_logs")
+}
+
+enum SwapType {
+  EXCHANGE
+  COVER
+  PERMANENT
+}
+
+enum SwapStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+enum Compensation {
+  PAYBACK
+  GIFT
+}
+
+enum DebtStatus {
+  OPEN
+  PAID
+  FORGIVEN
+  CANCELLED
+}
+
+enum SwapResolution {
+  ACCEPTED_BY_TARGET
+  REJECTED_BY_TARGET
+  CANCELLED_BY_REQUESTER
+  EXPIRED_NO_TAKER
+  ESCALATED
+  SLOT_CHANGED
+  REQUESTER_DID_IT
+  MEMBER_LEFT
+  CHORE_DISABLED
+  HOUSE_BREAK
+  ADMIN_OVERRIDE
+}
+
+/// Yêu cầu đổi ca. Mọi tham chiếu người dùng HouseMember.id (D15). CHECK viết tay trong migration.
+model ChoreSwapRequest {
+  id                 String          @id @default(uuid()) @db.Uuid
+  houseId            String          @db.Uuid
+  type               SwapType
+  /// HouseMember.id của người gửi (cùng quy ước với ChoreAssignment.assigneeId)
+  requesterMemberId  String          @db.Uuid
+  /// HouseMember.id của người nhận đích danh. null = Chợ ca (chỉ COVER)
+  targetMemberId     String?         @db.Uuid
+  fromAssignmentId   String?         @db.Uuid
+  toAssignmentId     String?         @db.Uuid
+  compensation       Compensation?
+  /// Ghi chú quà, tối đa 100 ký tự. Hiện được trên Chợ ca.
+  rewardNote         String?         @db.VarChar(100)
+  /// VNĐ, nguyên. Chỉ khi compensation = GIFT.
+  rewardAmount       Int?
+  /// Lý do riêng tư. Chỉ người gửi, người nhận và Admin thấy (D5). Không lên ticker.
+  reason             String?         @db.VarChar(200)
+  /// Lời nhắn gửi người nhận đích danh. Không hiện trên Chợ ca (D5).
+  note               String?         @db.VarChar(200)
+  status             SwapStatus      @default(PENDING)
+  resolution         SwapResolution?
+  expiresAt          DateTime
+  acceptedById       String?         @db.Uuid
+  acceptedAt         DateTime?
+  /// Idempotency-Key của lần accept thành công, để trả lại kết quả cũ khi bấm lại
+  acceptIdemKey      String?
+  /// Chuỗi leo thang: id của yêu cầu đầu tiên cùng một ca
+  rootRequestId      String          @db.Uuid
+  /// ADD_REWARD | RESEND | SELF | SELF_DEFAULT
+  escalationChoice   String?
+  /// = dueAt của ca − 1 giờ. Sau mốc này, mặc định SELF_DEFAULT
+  escalationDeadline DateTime?
+  /// Snapshot để tính tải và nợ, không đổi khi weight của việc đổi sau này
+  fromWeightSnapshot Int
+  toWeightSnapshot   Int?
+  /// Nợ cũ đã được cấn trừ bởi yêu cầu này (R-SWAP-7)
+  offsetDebtId       String?         @db.Uuid
+  version            Int             @default(0)
+  createdAt          DateTime        @default(now())
+  /// Idempotency-Key của lần tạo: cùng người, cùng key thì trả lại yêu cầu cũ.
+  createIdemKey      String?
+  /// Lúc rời PENDING (từ chối, hủy, hết hạn, chấp nhận). Dùng cho cooldown 24 giờ (R-SWAP-12).
+  closedAt           DateTime?
+  /// Lời từ chối của người nhận (tùy chọn). Chỉ người gửi, người nhận và Admin thấy.
+  rejectReason       String?         @db.VarChar(100)
+  /// ChoreAssignment.version lúc tạo, để accept phát hiện ca đã bị đổi từ chỗ khác (spec 5.2 bước 5).
+  fromVersion        Int             @default(0)
+  toVersion          Int?
+
+  @@unique([requesterMemberId, createIdemKey])
+  @@index([houseId, status, expiresAt])
+  @@index([rootRequestId])
+  @@map("chore_swap_requests")
+}
+
+/// Khóa một ca đang nằm trong yêu cầu PENDING (ở vai trò gửi hoặc đích).
+model SwapLock {
+  /// PK: một ca chỉ thuộc tối đa một yêu cầu PENDING (R-SWAP-1)
+  assignmentId  String @id @db.Uuid
+  swapRequestId String @db.Uuid
+
+  @@map("swap_locks")
+}
+
+/// Sổ nợ ca (làm bù). CHECK weight >= 1 trong migration.
+model ChoreDebt {
+  id                  String     @id @default(uuid()) @db.Uuid
+  houseId             String     @db.Uuid
+  /// HouseMember.id: người được làm hộ, đang nợ ca
+  debtorMemberId      String     @db.Uuid
+  /// HouseMember.id: người đã làm hộ, được làm bù
+  creditorMemberId    String     @db.Uuid
+  swapRequestId       String     @db.Uuid
+  /// Ca gốc được làm hộ. Nợ chỉ có hiệu lực khi ca này DONE (D7)
+  coverAssignmentId   String     @db.Uuid
+  /// fromWeightSnapshot của ca gốc, hoặc phần chênh sau cấn trừ. >= 1
+  weight              Int
+  status              DebtStatus @default(OPEN)
+  /// OFFSET | DEBTOR_LEFT | CREDITOR_LEFT | COVER_MISSED | ADMIN_REASSIGN | ABSENT_REASSIGN | STALE | FORGIVEN_BY_CREDITOR
+  closeReason         String?
+  pickOpensAt         DateTime?
+  pickDeadlineAt      DateTime?
+  pickAttempts        Int        @default(0)
+  paybackAssignmentId String?    @db.Uuid
+  createdAt           DateTime   @default(now())
+  settledAt           DateTime?
+
+  @@index([debtorMemberId, status])
+  @@index([creditorMemberId, status])
+  @@map("chore_debts")
+}
+
+/// Chỉ cho PERMANENT. Could, cắt đầu tiên nếu trễ.
+model RotationSwap {
+  id                 String   @id @default(uuid()) @db.Uuid
+  houseId            String   @db.Uuid
+  swapRequestId      String   @db.Uuid
+  userAMemberId      String   @db.Uuid
+  userBMemberId      String   @db.Uuid
+  effectiveWeekStart DateTime @db.Date
+  /// WAITING | APPLIED | FAILED | CANCELLED
+  status             String
+  failReason         String?
+
+  @@map("rotation_swaps")
+}
+
 enum ExpenseCategory {
   FOOD
   RENT
@@ -377,13 +622,16 @@ model Expense {
   spentAt         DateTime
   note            String?
   receiptImageUrl String?
+  /// Danh sách món của hóa đơn (tùy chọn): [{ name, lineTotal, userIds }]; userIds rỗng nếu không chia theo món.
+  items           Json?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
-  house     House          @relation(fields: [houseId], references: [id], onDelete: Cascade)
-  payer     User           @relation("ExpensePayer", fields: [payerId], references: [id], onDelete: Restrict)
-  createdBy User           @relation("ExpenseCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  splits    ExpenseSplit[]
+  house       House          @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  payer       User           @relation("ExpensePayer", fields: [payerId], references: [id], onDelete: Restrict)
+  createdBy   User           @relation("ExpenseCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  splits      ExpenseSplit[]
+  receiptScan ReceiptScan?
 
   @@index([houseId, spentAt])
   @@index([payerId])
@@ -499,4 +747,110 @@ model ListingPhoto {
 
   @@index([listingId, category, sortOrder])
   @@map("listing_photos")
+}
+
+enum ReceiptScanStatus {
+  /// Có bản nháp để người dùng xác nhận.
+  DRAFT
+  /// Gemini lỗi / ảnh không đọc được: chuyển sang nhập tay.
+  FAILED
+  /// Đã gắn vào một khoản chi.
+  USED
+}
+
+/// Một lần quét hóa đơn. Chỉ là bản nháp: không bao giờ tự tạo Expense (AI không tự ghi dữ liệu).
+/// Mỗi dòng cũng là một lần gọi Gemini nên đếm hạn mức 20 lượt / nhà / ngày bằng cách đếm dòng theo ngày giờ VN.
+model ReceiptScan {
+  id            String            @id @default(uuid()) @db.Uuid
+  houseId       String            @db.Uuid
+  scannedById   String            @db.Uuid
+  imageUrl      String
+  status        ReceiptScanStatus
+  /// NOT_A_RECEIPT | UNREADABLE | AI_TIMEOUT | AI_UNAVAILABLE khi status = FAILED.
+  failureReason String?
+  /// JSON nguyên bản Gemini trả về (debug và đánh giá độ chính xác OCR trong báo cáo).
+  draftJson     Json?
+  model         String?
+  latencyMs     Int?
+  /// Khoản chi được tạo từ bản nháp này (một-một).
+  expenseId     String?           @unique @db.Uuid
+  createdAt     DateTime          @default(now())
+
+  house     House    @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  scannedBy User     @relation(fields: [scannedById], references: [id], onDelete: Restrict)
+  expense   Expense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+
+  @@index([houseId, createdAt])
+  @@map("receipt_scans")
+}
+
+enum AssistantRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum AssistantCategory {
+  /// Mẹo sinh hoạt, tiết kiệm…
+  TIP
+  /// Sự cố đời sống (điện, nước, chóng mặt nhà…).
+  INCIDENT
+  /// Mâu thuẫn phòng trọ, cần khéo léo.
+  EMOTIONAL
+  /// Tin nhắn chứa nhắc nhở được tạo.
+  REMINDER
+  OTHER
+}
+
+enum ReminderSource {
+  /// Người dùng tự tạo.
+  USER
+  /// Sinh từ Trợ lý AI (người dùng bấm nút suggestedAction).
+  ASSISTANT
+  /// Cron / hệ thống.
+  SYSTEM
+}
+
+/// Tin nhắn trong phiên chat với Trợ lý AI. Riêng tư theo userId: không API nào trả tin nhắn cho người khác.
+/// threadId là UUID do client sinh cho mỗi phiên chat (chưa cần bảng Thread).
+model AssistantMessage {
+  id          String             @id @default(uuid()) @db.Uuid
+  userId      String             @db.Uuid
+  houseId     String             @db.Uuid
+  threadId    String             @db.Uuid
+  role        AssistantRole
+  content     String             @db.Text
+  category    AssistantCategory?
+  /// suggestedActions do Gemini gợi ý; chỉ là nút, người dùng bấm thì client mới gọi API thường.
+  actionsJson Json?
+  createdAt   DateTime           @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, houseId, createdAt])
+  @@index([userId, threadId, createdAt])
+  @@map("assistant_messages")
+}
+
+/// Nhắc nhở. Cron quét các dòng sentAt IS NULL có remindAt <= now rồi gửi socket + đánh sentAt.
+/// SQL tay trong migration: partial index trên ("remindAt") WHERE "sentAt" IS NULL.
+/// @@unique([userId, dedupeKey]): bấm nút AI hai lần không tạo hai nhắc giống nhau (Postgres unique cho phép nhiều NULL).
+model Reminder {
+  id        String         @id @default(uuid()) @db.Uuid
+  userId    String         @db.Uuid
+  houseId   String         @db.Uuid
+  title     String
+  remindAt  DateTime
+  source    ReminderSource
+  sentAt    DateTime?
+  dedupeKey String?
+  createdAt DateTime       @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, remindAt])
+  @@map("reminders")
 }

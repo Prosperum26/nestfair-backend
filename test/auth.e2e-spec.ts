@@ -204,4 +204,43 @@ describe('Auth (e2e)', () => {
       await http().post('/api/v1/auth/refresh').expect(401);
     });
   });
+
+  describe('POST /auth/change-password', () => {
+    const change = (token: string, body: object, cookie?: string) => {
+      const req = http().post('/api/v1/auth/change-password').set('Authorization', `Bearer ${token}`);
+      return (cookie ? req.set('Cookie', cookie) : req).send(body);
+    };
+
+    it('đổi được: phiên hiện tại sống, phiên khác bị thu hồi, đăng nhập bằng mật khẩu mới', async () => {
+      const body = valid();
+      const reg = await http().post('/api/v1/auth/register').send(body).expect(201);
+      const deviceA = cookiePair(refreshCookie(reg));
+      const login = await http().post('/api/v1/auth/login').send({ email: body.email, password: body.password }).expect(200);
+      const deviceB = cookiePair(refreshCookie(login));
+
+      await change(reg.body.accessToken, { currentPassword: body.password, newPassword: 'MatKhauMoi456' }, deviceA).expect(204);
+
+      await http().post('/api/v1/auth/refresh').set('Cookie', deviceB).expect(401);
+      await http().post('/api/v1/auth/refresh').set('Cookie', deviceA).expect(200);
+      await http().post('/api/v1/auth/login').send({ email: body.email, password: body.password }).expect(401);
+      await http().post('/api/v1/auth/login').send({ email: body.email, password: 'MatKhauMoi456' }).expect(200);
+    });
+
+    it('sai mật khẩu cũ thì 400 WRONG_PASSWORD (không phải 401)', async () => {
+      const body = valid();
+      const reg = await http().post('/api/v1/auth/register').send(body).expect(201);
+      const res = await change(reg.body.accessToken, { currentPassword: 'Sai12345', newPassword: 'MatKhauMoi456' }).expect(400);
+      expect(res.body.code).toBe('WRONG_PASSWORD');
+    });
+
+    it('mật khẩu mới yếu thì 400', async () => {
+      const body = valid();
+      const reg = await http().post('/api/v1/auth/register').send(body).expect(201);
+      await change(reg.body.accessToken, { currentPassword: body.password, newPassword: 'yeu' }).expect(400);
+    });
+
+    it('cần JWT', async () => {
+      await http().post('/api/v1/auth/change-password').send({ currentPassword: 'a', newPassword: 'b' }).expect(401);
+    });
+  });
 });

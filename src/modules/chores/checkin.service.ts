@@ -1,6 +1,10 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { coded } from '../../common/coded-exception.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ActivityService } from '../activity/activity.service.js';
+import { actorOfUser } from '../events/actor.js';
+import { ChoreDebtService } from '../swaps/chore-debt.service.js';
+import { SwapLifecycleService } from '../swaps/swap-lifecycle.service.js';
 import { EventsService } from '../events/events.service.js';
 import { CloudinaryService } from '../uploads/cloudinary.service.js';
 import { sha256, type UploadedImage, validateImageFile } from '../uploads/image-validation.js';
@@ -20,6 +24,9 @@ export class CheckinService {
     private readonly prisma: PrismaService,
     private readonly cloudinary: CloudinaryService,
     private readonly events: EventsService,
+    private readonly activity: ActivityService,
+    private readonly swapLifecycle: SwapLifecycleService,
+    private readonly debts: ChoreDebtService,
   ) {}
 
   /**
@@ -52,7 +59,7 @@ export class CheckinService {
     }
 
     const house = await this.prisma.house.findUniqueOrThrow({ where: { id: assignment.houseId }, select: { choreGraceHours: true } });
-    if (now < openAtOf(dsOf(assignment.occurrenceDate))) {
+    if (now < openAtOf(dsOf(assignment.occurrenceDate)) || (assignment.wheelLog && now < assignment.wheelLog.revealAt)) {
       throw coded(HttpStatus.UNPROCESSABLE_ENTITY, 'CHECKIN_NOT_OPEN', 'Chưa tới ngày làm nên chưa nộp ảnh được.');
     }
     if (now.getTime() > assignment.dueAt.getTime() + house.choreGraceHours * HOUR) {
@@ -62,34 +69,69 @@ export class CheckinService {
     const proofHash = sha256(file.buffer);
     const duplicate = await this.prisma.choreAssignment.findFirst({
       where: { houseId: assignment.houseId, proofHash, submittedAt: { gte: new Date(now.getTime() - DUPLICATE_WINDOW_DAYS * 24 * HOUR) } },
-      select: { id: true },
+      select: { id: true, checkinKey: true },
     });
-    if (duplicate) throw coded(HttpStatus.CONFLICT, 'PROOF_DUPLICATE', 'Ảnh này đã được dùng làm minh chứng trước đó, hãy chụp ảnh mới.');
+    if (duplicate) {
+      // Request song song cùng key: request kia vừa nộp xong chính ảnh này cho chính ca này → trả kết quả đó.
+      if (idempotencyKey && duplicate.id === assignment.id && duplicate.checkinKey === idempotencyKey) {
+        return toAssignmentDto(await this.prisma.choreAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: ASSIGNMENT_INCLUDE }));
+      }
+      throw coded(HttpStatus.CONFLICT, 'PROOF_DUPLICATE', 'Ảnh này đã được dùng làm minh chứng trước đó, hãy chụp ảnh mới.');
+    }
 
+    const actor = await actorOfUser(this.prisma, userId);
+    const outbox = this.events.outbox();
     const uploaded = await this.cloudinary.upload(file.buffer, `houses/${assignment.houseId}/proofs`);
     try {
       const others = await this.prisma.houseMember.count({ where: { houseId: assignment.houseId, leftAt: null, id: { not: membership.id } } });
       const selfAttested = others === 0;
-      const { count } = await this.prisma.choreAssignment.updateMany({
-        where: { id: assignment.id, status: { in: ['TODO', 'REJECTED'] }, disputed: false },
-        data: {
-          status: selfAttested ? 'DONE' : 'PENDING_VERIFY',
-          proofImageUrl: uploaded.url,
-          proofHash,
-          submittedAt: now,
-          isLate: now.getTime() > assignment.dueAt.getTime(),
-          rejectReason: null,
-          verifiedById: null,
-          verifiedAt: selfAttested ? now : null,
-          verifyMode: selfAttested ? 'SELF_ATTESTED' : null,
-          checkinKey: idempotencyKey ?? null,
-        },
+      const status = selfAttested ? 'DONE' : 'PENDING_VERIFY';
+      const count = await this.prisma.$transaction(async (tx) => {
+        // Khóa yêu cầu đổi ca trước khi sửa ca (cùng thứ tự khóa với accept).
+        await this.swapLifecycle.lockPendingFor(tx, [assignment.id]);
+        const res = await tx.choreAssignment.updateMany({
+          // assigneeId: ca có thể đã chuyển cho người khác trong lúc ảnh đang upload.
+          where: { id: assignment.id, assigneeId: membership.id, status: { in: ['TODO', 'REJECTED'] }, disputed: false },
+          data: {
+            version: { increment: 1 },
+            status,
+            proofImageUrl: uploaded.url,
+            proofHash,
+            submittedAt: now,
+            isLate: now.getTime() > assignment.dueAt.getTime(),
+            rejectReason: null,
+            verifiedById: null,
+            verifiedAt: selfAttested ? now : null,
+            verifyMode: selfAttested ? 'SELF_ATTESTED' : null,
+            checkinKey: idempotencyKey ?? null,
+          },
+        });
+        if (res.count === 1) {
+          await this.swapLifecycle.cancelOnCheckin(tx, outbox, assignment.id);
+          if (selfAttested) await this.debts.onAssignmentDone(tx, outbox, assignment.id, now);
+          await this.activity.record(tx, outbox, {
+            houseId: assignment.houseId,
+            type: 'chore.submitted',
+            actor,
+            params: { assignmentId: assignment.id, choreTitle: assignment.titleSnapshot, selfAttested },
+          });
+          outbox.toHouse(
+            assignment.houseId,
+            'chore:submitted',
+            { assignmentId: assignment.id, weekKey: assignment.weekKey, assigneeId: assignment.assigneeId, status, verifyMode: selfAttested ? 'SELF_ATTESTED' : null },
+            actor,
+          );
+        }
+        return res.count;
       });
       if (count === 0) {
         await this.cloudinary.destroy(uploaded.publicId);
         const fresh = await this.prisma.choreAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: ASSIGNMENT_INCLUDE });
         if (idempotencyKey && fresh.checkinKey === idempotencyKey && ['PENDING_VERIFY', 'DONE'].includes(fresh.status)) {
           return toAssignmentDto(fresh);
+        }
+        if (fresh.assigneeId !== membership.id) {
+          throw coded(HttpStatus.CONFLICT, 'ASSIGNMENT_STATE_CHANGED', 'Ca này vừa chuyển cho người khác nên ảnh chưa được ghi, hãy tải lại.');
         }
         throw coded(HttpStatus.CONFLICT, 'ASSIGNMENT_STATE_CHANGED', 'Ca này vừa được nộp rồi.');
       }
@@ -98,14 +140,8 @@ export class CheckinService {
       throw e;
     }
 
+    outbox.flush();
     const row = await this.prisma.choreAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: ASSIGNMENT_INCLUDE });
-    this.events.emitToHouse(row.houseId, 'chore:submitted', {
-      assignmentId: row.id,
-      weekKey: row.weekKey,
-      assigneeId: row.assigneeId,
-      status: row.status,
-      verifyMode: row.verifyMode,
-    });
     return toAssignmentDto(row);
   }
 }

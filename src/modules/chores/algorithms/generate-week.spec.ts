@@ -87,16 +87,18 @@ describe('nới rào', () => {
     expect(res.slots.find((s) => s.choreId === 'c1')!.memberId).not.toBe('m1');
   });
 
-  it('ca WHEEL trong lịch sử không tính vào rào nhưng tính vào tải', () => {
+  it('Q2 (#5): ca WHEEL trong lịch sử không tính vào rào lẫn tải, lịch sinh ra như không có', () => {
     const chores = [blockChore('c1', 2), blockChore('c2', 2), blockChore('c3', 2)];
     const history: HistSlot[] = [
       { weeksBack: 1, choreId: 'c1', memberId: 'm1', weight: 2, source: 'WHEEL' },
       { weeksBack: 1, choreId: 'c2', memberId: 'm1', weight: 2, source: 'WHEEL' },
       { weeksBack: 1, choreId: 'c3', memberId: 'm1', weight: 2, source: 'WHEEL' },
     ];
-    const res = generateWeek(input({ members: members(3), chores, history }));
-    expect(res.relaxed).toBe(false);
-    expect(res.loadAfter.m1).toBeGreaterThanOrEqual(6);
+    const withWheel = generateWeek(input({ members: members(3), chores, history, seed: 42 }));
+    const without = generateWeek(input({ members: members(3), chores, history: [], seed: 42 }));
+    expect(withWheel.relaxed).toBe(false);
+    expect(withWheel.slots).toEqual(without.slots);
+    expect(withWheel.loadAfter).toEqual(without.loadAfter);
   });
 });
 

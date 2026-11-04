@@ -77,6 +77,7 @@ export class ChoresController {
   @ApiOperation({ summary: 'Trưởng phòng sửa tên, độ nặng hoặc tạm ngưng việc' })
   @ApiOkResponse({ type: ChoreDto })
   @ApiNotFoundResponse({ description: 'Việc không thuộc nhà này' })
+  @ApiForbiddenResponse({ description: 'SYSTEM_CHORE: "Việc đột xuất" của vòng quay là việc hệ thống, không sửa được' })
   update(
     @CurrentMembership() m: HouseMembership,
     @Param('choreId', ParseUUIDPipe) choreId: string,

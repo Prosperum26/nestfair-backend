@@ -102,10 +102,9 @@ describe('Expenses (e2e)', () => {
     expect(lent.body.myShare).toBe(0);
   });
 
-  it('ITEMIZED chưa hỗ trợ (422); trộn dữ liệu sai kiểu chia (422 SPLIT_INVALID)', async () => {
+  it('trộn dữ liệu sai kiểu chia → 422 SPLIT_INVALID', async () => {
     const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
     const post = (body: object) => fx.as(users[0].token).post(url(houseId), { ...base, ...body });
-    expect((await post({ splitType: 'ITEMIZED' }).expect(422)).body.code).toBe('SPLIT_TYPE_NOT_SUPPORTED');
     expect((await post({ participantIds: [users[1].id] }).expect(422)).body.code).toBe('SPLIT_INVALID');
     expect((await post({ splits: [{ userId: users[1].id, amount: 100_000 }] }).expect(422)).body.code).toBe('SPLIT_INVALID');
     expect((await post({ splitType: 'EXACT' }).expect(422)).body.code).toBe('SPLIT_INVALID');
@@ -320,5 +319,309 @@ describe('Expenses (e2e)', () => {
     await fx.as(hung.token).get(url(houseId, '/summary?month=10-2026')).expect(400);
     const outsider = await fx.user('Người lạ');
     await fx.as(outsider.token).get(url(houseId, '/summary')).expect(403);
+  });
+
+  describe('ITEMIZED (chia theo món) và liên kết bản nháp OCR', () => {
+    /** Bản nháp OCR giả: ảnh nằm đúng thư mục nhà như CloudinaryService đặt, để assertReceiptUrl chấp nhận. */
+    const makeScan = (houseId: string, userId: string, over: Record<string, unknown> = {}) =>
+      fx.prisma.receiptScan.create({
+        data: {
+          houseId,
+          scannedById: userId,
+          imageUrl: `https://res.cloudinary.com/demo/image/upload/v1/nestfair/houses/${houseId}/receipts/scan${++seq}.png`,
+          status: 'DRAFT',
+          ...over,
+        },
+      });
+
+    /** V1 (ảnh 18): Hùng, Thiện, Mai, Quân; sữa tươi chỉ Mai dùng. */
+    const bhxItems = (ids: string[]) => {
+      const [h, t, m, q] = ids;
+      return [
+        { name: 'Trứng gà hộp 10', lineTotal: 32_000, userIds: [h, t, m, q] },
+        { name: 'Rau muống', lineTotal: 15_000, userIds: [h, t, m, q] },
+        { name: 'Mì Hảo Hảo thùng 30', lineTotal: 108_000, userIds: [h, q] },
+        { name: 'Sữa tươi 1L', lineTotal: 64_000, userIds: [m] },
+        { name: 'Túi rác cuộn', lineTotal: 26_000, userIds: [h, t, m, q] },
+      ];
+    };
+    const itemized = (ids: string[], over: object = {}) => ({
+      ...base,
+      title: 'Bách Hóa Xanh',
+      category: 'FOOD',
+      totalAmount: 245_000,
+      splitType: 'ITEMIZED',
+      items: bhxItems(ids),
+      ...over,
+    });
+
+    it('V1: chia theo món khớp ảnh 18, Σ phần chia đúng 245.000đ, lưu splitType ITEMIZED', async () => {
+      const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
+      const ids = users.map((u) => u.id);
+      const res = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+      expect(res.body.splitType).toBe('ITEMIZED');
+      expect(amountsOf(res.body)).toEqual({ [ids[0]]: 72_250, [ids[1]]: 18_250, [ids[2]]: 82_250, [ids[3]]: 72_250 });
+      const saved = await fx.prisma.expenseSplit.aggregate({ where: { expenseId: res.body.id }, _sum: { allocatedAmount: true } });
+      expect(saved._sum.allocatedAmount).toBe(245_000);
+    });
+
+    it('tổng hóa đơn khác tổng món: phần chênh chia theo tỷ lệ tiền món (V2: giảm giá 10.000đ)', async () => {
+      const { houseId, users } = await fx.houseWith(['An', 'Bình', 'Chi']);
+      const [a, b, c] = users.map((u) => u.id);
+      const res = await fx
+        .as(users[0].token)
+        .post(url(houseId), {
+          ...base,
+          totalAmount: 100_000,
+          splitType: 'ITEMIZED',
+          items: [
+            { name: 'Món 1', lineTotal: 60_000, userIds: [a, b, c] },
+            { name: 'Món 2', lineTotal: 50_000, userIds: [a] },
+          ],
+        })
+        .expect(201);
+      expect(amountsOf(res.body)).toEqual({ [a]: 63_636, [b]: 18_182, [c]: 18_182 });
+    });
+
+    it('items thiếu khi ITEMIZED → 422 SPLIT_INVALID', async () => {
+      const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+      const res = await fx.as(users[0].token).post(url(houseId), { ...base, splitType: 'ITEMIZED' }).expect(422);
+      expect(res.body.code).toBe('SPLIT_INVALID');
+    });
+
+    it('món gán cho người không thuộc nhà → 422 NOT_A_HOUSE_MEMBER, không tạo khoản chi', async () => {
+      const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+      const outsider = await fx.user('Người lạ');
+      const res = await fx
+        .as(users[0].token)
+        .post(url(houseId), {
+          ...base,
+          totalAmount: 100_000,
+          splitType: 'ITEMIZED',
+          items: [{ name: 'x', lineTotal: 100_000, userIds: [users[0].id, outsider.id] }],
+        })
+        .expect(422);
+      expect(res.body.code).toBe('NOT_A_HOUSE_MEMBER');
+      expect(await fx.prisma.expense.count({ where: { houseId } })).toBe(0);
+    });
+
+    it('items sai định dạng → 400 (rỗng, món 0đ, thiếu người, quá 100 món, thiếu tên)', async () => {
+      const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+      const ids = users.map((u) => u.id);
+      const post = (items: unknown) =>
+        fx.as(users[0].token).post(url(houseId), { ...base, splitType: 'ITEMIZED', items });
+      await post([]).expect(400);
+      await post([{ name: 'x', lineTotal: 0, userIds: ids }]).expect(400);
+      await post([{ name: 'x', lineTotal: 1000, userIds: [] }]).expect(400);
+      await post([{ name: 'x', lineTotal: 1000, userIds: [ids[0], ids[0]] }]).expect(400);
+      await post([{ name: '', lineTotal: 1000, userIds: ids }]).expect(400);
+      await post(Array.from({ length: 101 }, () => ({ name: 'x', lineTotal: 1000, userIds: ids }))).expect(400);
+    });
+
+    describe('danh sách món lưu để xem lại', () => {
+      it('ITEMIZED lưu items đúng thứ tự; GET chi tiết và danh sách trả y hệt; Σ phần chia vẫn bằng tổng', async () => {
+        const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
+        const ids = users.map((u) => u.id);
+        const res = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+        expect(res.body.items).toEqual(bhxItems(ids));
+        const detail = await fx.as(users[0].token).get(url(houseId, `/${res.body.id}`)).expect(200);
+        expect(detail.body.items).toEqual(bhxItems(ids));
+        const list = await fx.as(users[0].token).get(url(houseId, '?month=2026-10')).expect(200);
+        expect(list.body[0].items).toEqual(bhxItems(ids));
+        const saved = await fx.prisma.expenseSplit.aggregate({ where: { expenseId: res.body.id }, _sum: { allocatedAmount: true } });
+        expect(saved._sum.allocatedAmount).toBe(245_000);
+      });
+
+      it('kiểu chia khác kèm items: lưu tên + tiền với userIds [], bỏ qua userIds gửi lên, phần chia y hệt khi không gửi items', async () => {
+        const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+        const outsider = await fx.user('Người lạ');
+        const items = [
+          { name: 'Rau muống', lineTotal: 15_000, userIds: [outsider.id] },
+          { name: 'Sữa', lineTotal: 64_000 },
+        ];
+        for (const type of ['EQUAL', 'CUSTOM', 'EXACT'] as const) {
+          const extra =
+            type === 'CUSTOM'
+              ? { participantIds: [users[0].id, users[1].id] }
+              : type === 'EXACT'
+                ? { splits: [{ userId: users[0].id, amount: 60_000 }, { userId: users[1].id, amount: 40_000 }] }
+                : {};
+          const body = { ...base, splitType: type, ...extra };
+          const withItems = await fx.as(users[0].token).post(url(houseId), { ...body, items }).expect(201);
+          const without = await fx.as(users[0].token).post(url(houseId), body).expect(201);
+          expect(amountsOf(withItems.body), type).toEqual(amountsOf(without.body));
+          expect(withItems.body.items, type).toEqual([
+            { name: 'Rau muống', lineTotal: 15_000, userIds: [] },
+            { name: 'Sữa', lineTotal: 64_000, userIds: [] },
+          ]);
+        }
+      });
+
+      it('khoản không có items (hoặc cột null như khoản cũ) trả items: []', async () => {
+        const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+        const res = await fx.as(users[0].token).post(url(houseId), base).expect(201);
+        expect(res.body.items).toEqual([]);
+        expect((await fx.prisma.expense.findUniqueOrThrow({ where: { id: res.body.id } })).items).toBeNull();
+        const detail = await fx.as(users[0].token).get(url(houseId, `/${res.body.id}`)).expect(200);
+        expect(detail.body.items).toEqual([]);
+      });
+
+      it('cột items chứa JSON hỏng không làm GET trả 500', async () => {
+        const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+        const res = await fx.as(users[0].token).post(url(houseId), base).expect(201);
+        await fx.prisma.$executeRawUnsafe('UPDATE expenses SET items = $1::jsonb WHERE id = $2::uuid', '{"oops":true}', res.body.id);
+        const detail = await fx.as(users[0].token).get(url(houseId, `/${res.body.id}`)).expect(200);
+        expect(detail.body.items).toEqual([]);
+      });
+
+      it('ITEMIZED có items rỗng hoặc món không người dùng → 400 ITEMS_INVALID, không tạo khoản chi', async () => {
+        const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+        const ids = users.map((u) => u.id);
+        const post = (items: unknown) => fx.as(users[0].token).post(url(houseId), { ...base, splitType: 'ITEMIZED', items });
+        expect((await post([]).expect(400)).body.code).toBe('ITEMS_INVALID');
+        expect((await post([{ name: 'x', lineTotal: 1000, userIds: [] }]).expect(400)).body.code).toBe('ITEMS_INVALID');
+        expect((await post([{ name: 'x', lineTotal: 1000, userIds: ids }, { name: 'y', lineTotal: 1000 }]).expect(400)).body.code).toBe('ITEMS_INVALID');
+        expect(await fx.prisma.expense.count({ where: { houseId } })).toBe(0);
+      });
+    });
+
+    it('tạo kèm receiptScanId: scan chuyển USED và trỏ tới khoản chi; ảnh lấy từ scan; expense:new có fromReceipt', async () => {
+      const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
+      const ids = users.map((u) => u.id);
+      const scan = await makeScan(houseId, users[0].id);
+      const emit = vi.spyOn(fx.app.get(EventsService), 'emitToHouse');
+
+      const res = await fx.as(users[0].token).post(url(houseId), itemized(ids, { receiptScanId: scan.id })).expect(201);
+      expect(res.body.receiptImageUrl).toBe(scan.imageUrl);
+      const after = await fx.prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
+      expect(after).toMatchObject({ status: 'USED', expenseId: res.body.id });
+      expect(emit).toHaveBeenCalledWith(houseId, 'expense:new', expect.objectContaining({ expenseId: res.body.id, fromReceipt: true }));
+    });
+
+    it('scan FAILED (đã chuyển nhập tay) vẫn gắn được vào khoản chi nhập tay', async () => {
+      const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+      const scan = await makeScan(houseId, users[0].id, { status: 'FAILED', failureReason: 'NOT_A_RECEIPT' });
+      await fx.as(users[0].token).post(url(houseId), { ...base, receiptScanId: scan.id }).expect(201);
+      expect((await fx.prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).status).toBe('USED');
+    });
+
+    it('khoản chi bị từ chối (422) thì scan vẫn là DRAFT, dùng lại được', async () => {
+      const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+      const scan = await makeScan(houseId, users[0].id);
+      await fx.as(users[0].token).post(url(houseId), { ...base, splitType: 'ITEMIZED', receiptScanId: scan.id }).expect(422);
+      expect(await fx.prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({ status: 'DRAFT', expenseId: null });
+    });
+
+    it('dùng lại scan hoặc bấm lưu đúp song song → 409 RECEIPT_SCAN_USED, chỉ có đúng 1 khoản chi', async () => {
+      const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+      const scan = await makeScan(houseId, users[0].id);
+      const send = () => fx.as(users[0].token).post(url(houseId), { ...base, receiptScanId: scan.id });
+      const results = await Promise.all([send(), send()]);
+      expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([201, 409]);
+      expect(results.find((r) => r.status === 409)!.body.code).toBe('RECEIPT_SCAN_USED');
+      expect(await fx.prisma.expense.count({ where: { houseId } })).toBe(1);
+
+      const again = await send().expect(409);
+      expect(again.body.code).toBe('RECEIPT_SCAN_USED');
+      expect(await fx.prisma.expense.count({ where: { houseId } })).toBe(1);
+    });
+
+    it('receiptScanId của nhà khác hoặc không tồn tại → 404 RECEIPT_SCAN_NOT_FOUND', async () => {
+      const a = await fx.houseWith(['Hùng', 'Thiện']);
+      const b = await fx.houseWith(['Lan', 'Huệ']);
+      const scanOfB = await makeScan(b.houseId, b.users[0].id);
+      const post = (receiptScanId: string) => fx.as(a.users[0].token).post(url(a.houseId), { ...base, receiptScanId });
+      expect((await post(scanOfB.id).expect(404)).body.code).toBe('RECEIPT_SCAN_NOT_FOUND');
+      expect((await post(randomUUID()).expect(404)).body.code).toBe('RECEIPT_SCAN_NOT_FOUND');
+      await post('khong-phai-uuid').expect(400);
+      expect((await fx.prisma.receiptScan.findUniqueOrThrow({ where: { id: scanOfB.id } })).status).toBe('DRAFT');
+    });
+
+    it('sửa khoản ITEMIZED: gửi lại items thì chia lại; đổi tiền mà thiếu items → 422; PATCH không nhận receiptScanId (400)', async () => {
+      const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện', 'Mai', 'Quân']);
+      const ids = users.map((u) => u.id);
+      const created = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+      const path = url(houseId, `/${created.body.id}`);
+
+      const renamed = await fx.as(users[0].token).patch(path, { title: 'BHX đổi tên' }).expect(200);
+      expect(amountsOf(renamed.body)).toEqual(amountsOf(created.body));
+
+      expect((await fx.as(users[0].token).patch(path, { totalAmount: 250_000 }).expect(422)).body.code).toBe('SPLIT_INVALID');
+
+      const resplit = await fx
+        .as(users[0].token)
+        .patch(path, { totalAmount: 33_000, splitType: 'ITEMIZED', items: [{ name: 'x', lineTotal: 30_000, userIds: [ids[0], ids[1]] }] })
+        .expect(200);
+      expect(amountsOf(resplit.body)).toEqual({ [ids[0]]: 16_500, [ids[1]]: 16_500 });
+
+      const scan = await makeScan(houseId, users[0].id);
+      await fx.as(users[0].token).patch(path, { receiptScanId: scan.id }).expect(400);
+    });
+
+    describe('PATCH và danh sách món', () => {
+      const setup = async (names = ['Hùng', 'Thiện', 'Mai', 'Quân']) => {
+        const { houseId, users } = await fx.houseWith(names);
+        return { houseId, users, ids: users.map((u) => u.id) };
+      };
+
+      it('chỉ đổi title trên khoản ITEMIZED: items và phần chia y nguyên', async () => {
+        const { houseId, users, ids } = await setup();
+        const created = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+        const res = await fx.as(users[0].token).patch(url(houseId, `/${created.body.id}`), { title: 'BHX đổi tên' }).expect(200);
+        expect(res.body.items).toEqual(bhxItems(ids));
+        expect(amountsOf(res.body)).toEqual(amountsOf(created.body));
+      });
+
+      it('ITEMIZED gửi items mới kèm tiền mới: items được thay, phần chia tính lại, Σ bằng tổng', async () => {
+        const { houseId, users, ids } = await setup();
+        const created = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+        const next = [{ name: 'x', lineTotal: 30_000, userIds: [ids[0], ids[1]] }];
+        const res = await fx
+          .as(users[0].token)
+          .patch(url(houseId, `/${created.body.id}`), { totalAmount: 33_000, splitType: 'ITEMIZED', items: next })
+          .expect(200);
+        expect(res.body.items).toEqual(next);
+        expect(amountsOf(res.body)).toEqual({ [ids[0]]: 16_500, [ids[1]]: 16_500 });
+      });
+
+      it('khoản EQUAL: PATCH items thay danh sách mà không đổi phần chia; items: [] xóa danh sách', async () => {
+        const { houseId, users } = await setup(['Hùng', 'Thiện', 'Mai']);
+        const created = await fx
+          .as(users[0].token)
+          .post(url(houseId), { ...base, items: [{ name: 'a', lineTotal: 40_000 }] })
+          .expect(201);
+        const path = url(houseId, `/${created.body.id}`);
+
+        const replaced = await fx.as(users[0].token).patch(path, { items: [{ name: 'b', lineTotal: 60_000 }, { name: 'c', lineTotal: 40_000 }] }).expect(200);
+        expect(replaced.body.items).toEqual([
+          { name: 'b', lineTotal: 60_000, userIds: [] },
+          { name: 'c', lineTotal: 40_000, userIds: [] },
+        ]);
+        expect(amountsOf(replaced.body)).toEqual(amountsOf(created.body));
+
+        const cleared = await fx.as(users[0].token).patch(path, { items: [] }).expect(200);
+        expect(cleared.body.items).toEqual([]);
+        expect((await fx.prisma.expense.findUniqueOrThrow({ where: { id: created.body.id } })).items).toBeNull();
+      });
+
+      it('đổi ITEMIZED sang EQUAL mà không gửi items: giữ tên và tiền, xóa userIds', async () => {
+        const { houseId, users, ids } = await setup();
+        const created = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+        const res = await fx.as(users[0].token).patch(url(houseId, `/${created.body.id}`), { splitType: 'EQUAL' }).expect(200);
+        expect(res.body.splitType).toBe('EQUAL');
+        expect(res.body.items).toEqual(bhxItems(ids).map((i) => ({ name: i.name, lineTotal: i.lineTotal, userIds: [] })));
+      });
+
+      it('ITEMIZED gửi items rỗng hoặc món không người dùng → 400 ITEMS_INVALID, khoản không đổi', async () => {
+        const { houseId, users, ids } = await setup();
+        const created = await fx.as(users[0].token).post(url(houseId), itemized(ids)).expect(201);
+        const path = url(houseId, `/${created.body.id}`);
+        expect((await fx.as(users[0].token).patch(path, { splitType: 'ITEMIZED', items: [] }).expect(400)).body.code).toBe('ITEMS_INVALID');
+        const noUser = await fx.as(users[0].token).patch(path, { items: [{ name: 'x', lineTotal: 1000, userIds: [] }] }).expect(400);
+        expect(noUser.body.code).toBe('ITEMS_INVALID');
+        const after = await fx.as(users[0].token).get(path).expect(200);
+        expect(after.body.items).toEqual(bhxItems(ids));
+      });
+    });
   });
 });

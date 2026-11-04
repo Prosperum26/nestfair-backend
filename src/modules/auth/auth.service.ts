@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  HttpStatus,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -7,10 +8,12 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcrypt';
 import { createHash, randomBytes } from 'node:crypto';
+import { coded } from '../../common/coded-exception.js';
 import type { Env } from '../../config/env.validation.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { type PublicUser, publicUserSelect } from '../users/public-user.js';
+import type { ChangePasswordDto } from './dto/change-password.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { RegisterDto } from './dto/register.dto.js';
 
@@ -177,11 +180,56 @@ export class AuthService {
     });
   }
 
-  async logout(rawToken: string | undefined): Promise<void> {
-    if (!rawToken) return;
+  /** Thu hồi refresh token; trả userId của phiên (để ngắt socket), không có thì null. */
+  async logout(rawToken: string | undefined): Promise<string | null> {
+    if (!rawToken) return null;
+    const tokenHash = hashToken(rawToken);
+    const row = await this.prisma.refreshToken.findUnique({ where: { tokenHash }, select: { userId: true } });
     await this.prisma.refreshToken.updateMany({
-      where: { tokenHash: hashToken(rawToken), revokedAt: null },
+      where: { tokenHash, revokedAt: null },
       data: { revokedAt: new Date() },
+    });
+    return row?.userId ?? null;
+  }
+
+  /**
+   * Đổi mật khẩu: kiểm tra mật khẩu cũ, lưu hash mới và thu hồi mọi phiên khác (thiết bị khác phải đăng nhập lại),
+   * giữ phiên hiện tại (`currentRawToken` từ cookie). Lỗi mật khẩu trả 400 chứ không 401 để client
+   * không nhầm với phiên hết hạn rồi tự đăng xuất.
+   */
+  async changePassword(
+    userId: string,
+    dto: ChangePasswordDto,
+    currentRawToken: string | undefined,
+  ): Promise<void> {
+    const found = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { passwordHash: true },
+    });
+    if (!found) throw new UnauthorizedException(INVALID_SESSION);
+    if (!found.passwordHash) {
+      throw coded(
+        HttpStatus.BAD_REQUEST,
+        'PASSWORD_NOT_SET',
+        'Tài khoản này đăng nhập bằng Google nên chưa có mật khẩu.',
+      );
+    }
+    if (!(await bcrypt.compare(dto.currentPassword, found.passwordHash))) {
+      throw coded(HttpStatus.BAD_REQUEST, 'WRONG_PASSWORD', 'Mật khẩu hiện tại không đúng.');
+    }
+    if (dto.currentPassword === dto.newPassword) {
+      throw coded(HttpStatus.BAD_REQUEST, 'SAME_PASSWORD', 'Mật khẩu mới cần khác mật khẩu hiện tại.');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_COST);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { passwordHash } });
+      await tx.refreshToken.updateMany({
+        where: currentRawToken
+          ? { userId, revokedAt: null, tokenHash: { not: hashToken(currentRawToken) } }
+          : { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
     });
   }
 

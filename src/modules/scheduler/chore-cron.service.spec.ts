@@ -1,9 +1,13 @@
 import type { ConfigService } from '@nestjs/config';
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '../../prisma/prisma.service.js';
+import type { ActivityService } from '../activity/activity.service.js';
 import type { AuditService } from '../chores/audit.service.js';
 import type { ScheduleService } from '../chores/schedule.service.js';
 import type { EventsService } from '../events/events.service.js';
+import type { PaybackService } from '../swaps/payback.service.js';
+import type { ChoreDebtService } from '../swaps/chore-debt.service.js';
+import type { SwapLifecycleService } from '../swaps/swap-lifecycle.service.js';
 import type { CloudinaryService } from '../uploads/cloudinary.service.js';
 import { ChoreCronService } from './chore-cron.service.js';
 
@@ -17,6 +21,10 @@ function build(nodeEnv: string) {
     {} as AuditService,
     {} as CloudinaryService,
     { get: () => nodeEnv } as unknown as ConfigService<never, true>,
+    {} as ActivityService,
+    {} as SwapLifecycleService,
+    {} as ChoreDebtService,
+    {} as PaybackService,
   );
   return { svc, catchUpAll };
 }

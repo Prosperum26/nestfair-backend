@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   ArrayUnique,
   IsArray,
@@ -37,6 +38,32 @@ export class ExactSplitDto {
   amount: number;
 }
 
+/** Một món trên hóa đơn và những người cùng dùng món đó (chia theo món). */
+export class ItemizedItemDto {
+  @ApiProperty({ example: 'Trứng gà hộp 10', minLength: 1, maxLength: 80 })
+  @Transform(trim)
+  @IsString()
+  @Length(1, 80, { message: 'Tên món cần từ 1 đến 80 ký tự.' })
+  name: string;
+
+  @ApiProperty({ minimum: 1, maximum: MAX_AMOUNT, example: 32_000, description: 'Thành tiền của dòng, số nguyên VNĐ' })
+  @IsInt({ message: 'Tiền món phải là số nguyên VNĐ.' })
+  @Min(1, { message: 'Tiền món phải lớn hơn 0.' })
+  @Max(MAX_AMOUNT, { message: 'Tiền món quá lớn.' })
+  lineTotal: number;
+
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Những người cùng dùng món này (chia đều giữa họ). Bắt buộc ít nhất một người khi ITEMIZED; kiểu chia khác bỏ qua và lưu [].',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique({ message: 'Danh sách người dùng món bị trùng.' })
+  @IsUUID('all', { each: true, message: 'userIds không hợp lệ.' })
+  userIds?: string[];
+}
+
 export class CreateExpenseDto {
   @ApiProperty({ example: 'Tiền điện tháng 10', minLength: 1, maxLength: 80 })
   @Transform(trim)
@@ -62,7 +89,7 @@ export class CreateExpenseDto {
   @ApiProperty({
     enum: SplitType,
     enumName: 'SplitType',
-    description: 'EQUAL = chia đều cả nhà, CUSTOM = chia đều cho người được chọn, EXACT = số tiền từng người, ITEMIZED = chưa hỗ trợ',
+    description: 'EQUAL = chia đều cả nhà, CUSTOM = chia đều cho người được chọn, EXACT = số tiền từng người, ITEMIZED = theo từng món (cần items)',
   })
   @IsEnum(SplitType, { message: 'Kiểu chia không hợp lệ.' })
   splitType: SplitType;
@@ -82,6 +109,26 @@ export class CreateExpenseDto {
   @ValidateNested({ each: true })
   @Type(() => ExactSplitDto)
   splits?: ExactSplitDto[];
+
+  @ApiPropertyOptional({
+    type: [ItemizedItemDto],
+    description:
+      'Danh sách món của hóa đơn, tối đa 100 món, lưu để xem lại với mọi kiểu chia. ITEMIZED bắt buộc có items (mỗi món ít nhất một người) và dùng nó để chia: phần chênh giữa totalAmount và tổng các món (giảm giá, phí) được chia theo tỷ lệ tiền món của từng người.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100, { message: 'Tối đa 100 món.' })
+  @ValidateNested({ each: true })
+  @Type(() => ItemizedItemDto)
+  items?: ItemizedItemDto[];
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Bản nháp OCR (POST /expenses/scan) mà khoản chi này được tạo từ đó. Chỉ khi tạo; mỗi bản nháp chỉ dùng một lần.',
+  })
+  @IsOptional()
+  @IsUUID('all', { message: 'receiptScanId không hợp lệ.' })
+  receiptScanId?: string;
 
   @ApiPropertyOptional({ example: '2026-10-01T12:00:00+07:00', description: 'Thời điểm chi. Mặc định là bây giờ.' })
   @IsOptional()

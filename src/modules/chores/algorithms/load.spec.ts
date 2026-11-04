@@ -20,8 +20,14 @@ describe('rollingLoad', () => {
     expect(load).toEqual({ a: 5, b: 0 });
   });
 
-  it('tính cả ca WHEEL vào tải', () => {
-    expect(rollingLoad([slot({ source: 'WHEEL', weight: 4 })], ['a'], {})).toEqual({ a: 4 });
+  it('Q2 (#5): ca vòng quay (WHEEL) không tính vào tải', () => {
+    expect(rollingLoad([slot({ source: 'WHEEL', weight: 4 }), slot({ weight: 2 })], ['a'], {})).toEqual({ a: 2 });
+  });
+
+  it('T-LW-07: thêm 4 ca WHEEL cho một người thì tải không đổi', () => {
+    const base = [slot({ weight: 3 }), slot({ memberId: 'b', weight: 2 })];
+    const wheel = Array.from({ length: 4 }, () => slot({ source: 'WHEEL', weight: 1 }));
+    expect(rollingLoad([...base, ...wheel], ['a', 'b'], {})).toEqual(rollingLoad(base, ['a', 'b'], {}));
   });
 
   it('bỏ qua người không còn trong danh sách đủ điều kiện', () => {

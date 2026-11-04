@@ -52,7 +52,7 @@ export async function buildGenContext(db: Db, houseId: string, weekStart: DateSt
     select: { id: true, userId: true, joinedAt: true },
     orderBy: { joinedAt: 'asc' },
   });
-  const choreRows = await db.chore.findMany({ where: { houseId, isActive: true }, orderBy: { createdAt: 'asc' } });
+  const choreRows = await db.chore.findMany({ where: { houseId, isActive: true, isSystem: false }, orderBy: { createdAt: 'asc' } });
 
   // Vắng / nghỉ trong tuần đang sinh.
   const weekEnd = addDays(weekStart, 6);
@@ -86,6 +86,8 @@ export async function buildGenContext(db: Db, houseId: string, weekStart: DateSt
           weekStart: { in: scheduled.map((s) => s.weekStart) },
           assigneeId: { not: null },
           status: { in: [...COUNTED_STATUSES] },
+          // Q2 (#5): ca vòng quay không tính rào, không tính tải.
+          source: { not: 'WHEEL' },
         },
         select: { choreId: true, assigneeId: true, weightSnapshot: true, source: true, weekStart: true },
       })

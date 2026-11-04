@@ -7,6 +7,8 @@ import {
 import { Prisma } from '../../generated/prisma/client.js';
 import type { HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ActivityService } from '../activity/activity.service.js';
+import { actorOfUser } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { closeListingIfFull } from '../listing/close-if-full.js';
 import type { CreateHouseDto } from './dto/create-house.dto.js';
@@ -29,6 +31,7 @@ export class HousesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventsService,
+    private readonly activity: ActivityService,
   ) {}
 
   /** Tạo nhà, người tạo là trưởng phòng (ADMIN). */
@@ -54,6 +57,8 @@ export class HousesService {
    * không bị vượt khi nhiều người cùng vào lúc nhà còn 1 chỗ.
    */
   async join(userId: string, inviteCode: string): Promise<HouseDetailDto> {
+    const actor = await actorOfUser(this.prisma, userId);
+    const outbox = this.events.outbox();
     const joined = await this.prisma
       .$transaction(async (tx) => {
         const [house] = await tx.$queryRaw<
@@ -80,6 +85,12 @@ export class HousesService {
         await tx.houseMember.create({
           data: { houseId: house.id, userId, role: 'ROOMMATE' },
         });
+        await this.activity.record(tx, outbox, {
+          houseId: house.id,
+          type: 'member.joined',
+          actor,
+          params: {},
+        });
         // Người vào cuối làm nhà đủ người thì tin OPEN tự đóng, cùng transaction và cùng khóa dòng nhà.
         const closed = await closeListingIfFull(
           tx,
@@ -104,6 +115,9 @@ export class HousesService {
         reason: 'FULL',
       });
     }
+    // Sau commit: socket đang mở của người mới vào room nhà, cả nhà nhận member:joined.
+    await this.events.addMemberToHouse(userId, joined.houseId);
+    outbox.toHouse(joined.houseId, 'member:joined', { userId, name: actor.name }, actor).flush();
     return this.detail(joined.houseId, 'ROOMMATE');
   }
 

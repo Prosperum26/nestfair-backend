@@ -58,4 +58,14 @@ describe('coded', () => {
       error: 'Unsupported Media Type',
     });
   });
+
+  it('trường thêm đi kèm nhưng không đè trường chuẩn', () => {
+    expect(coded(HttpStatus.CONFLICT, 'WHEEL_BUSY', 'Đợi chút', { retryAfterMs: 4200, code: 'X' }).getResponse()).toEqual({
+      statusCode: 409,
+      message: 'Đợi chút',
+      error: 'Conflict',
+      code: 'WHEEL_BUSY',
+      retryAfterMs: 4200,
+    });
+  });
 });

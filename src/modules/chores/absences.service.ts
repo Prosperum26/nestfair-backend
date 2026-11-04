@@ -2,6 +2,9 @@ import { ForbiddenException, HttpStatus, Injectable, NotFoundException } from '@
 import { coded } from '../../common/coded-exception.js';
 import type { HouseRole } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ActivityService } from '../activity/activity.service.js';
+import { actorOfMember } from '../events/actor.js';
+import { EventsService } from '../events/events.service.js';
 import { AuditService } from './audit.service.js';
 import { assertDateRange } from './date-range.js';
 import type { AbsenceDto, CreateAbsenceDto } from './dto/absence.dto.js';
@@ -20,6 +23,8 @@ export class AbsencesService {
     private readonly prisma: PrismaService,
     private readonly schedule: ScheduleService,
     private readonly audit: AuditService,
+    private readonly events: EventsService,
+    private readonly activity: ActivityService,
   ) {}
 
   private toDto(r: { id: string; userId: string; startDate: Date; endDate: Date; reason: string | null; createdById: string; createdAt: Date; user: { fullName: string } }): AbsenceDto {
@@ -54,17 +59,30 @@ export class AbsencesService {
     const member = await this.prisma.houseMember.findFirst({ where: { houseId, userId: targetUserId, leftAt: null }, select: { id: true } });
     if (!member) throw coded(HttpStatus.BAD_REQUEST, 'NOT_ELIGIBLE_MEMBER', 'Người này không ở trong nhà.');
 
-    const row = await this.prisma.memberAbsence.create({
-      data: {
+    const who = await actorOfMember(this.prisma, actor.id);
+    const outbox = this.events.outbox();
+    const row = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.memberAbsence.create({
+        data: {
+          houseId,
+          userId: targetUserId,
+          startDate: dateOf(dto.startDate),
+          endDate: dateOf(dto.endDate),
+          reason: dto.reason,
+          createdById: actor.userId,
+        },
+        include: { user: { select: { fullName: true } } },
+      });
+      // Không kèm lý do vắng lên ticker.
+      await this.activity.record(tx, outbox, {
         houseId,
-        userId: targetUserId,
-        startDate: dateOf(dto.startDate),
-        endDate: dateOf(dto.endDate),
-        reason: dto.reason,
-        createdById: actor.userId,
-      },
-      include: { user: { select: { fullName: true } } },
+        type: 'absence.created',
+        actor: who,
+        params: { targetUserId, targetName: created.user.fullName, startDate: dto.startDate, endDate: dto.endDate },
+      });
+      return created;
     });
+    outbox.flush();
     const moved = await this.schedule.moveSlotsForAbsence(houseId, targetUserId, dto.startDate, dto.endDate, now);
     await this.audit.log(houseId, actor.id, 'ABSENCE_CREATED', {
       absenceId: row.id,
