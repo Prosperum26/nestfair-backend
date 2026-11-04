@@ -10,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { ActivityService } from '../activity/activity.service.js';
 import { actorOfUser } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
+import { closeListingIfFull } from '../listing/close-if-full.js';
 import type { CreateHouseDto } from './dto/create-house.dto.js';
 import type {
   HouseDetailDto,
@@ -58,7 +59,7 @@ export class HousesService {
   async join(userId: string, inviteCode: string): Promise<HouseDetailDto> {
     const actor = await actorOfUser(this.prisma, userId);
     const outbox = this.events.outbox();
-    const houseId = await this.prisma
+    const joined = await this.prisma
       .$transaction(async (tx) => {
         const [house] = await tx.$queryRaw<
           { id: string; maxMembers: number; inviteExpiresAt: Date }[]
@@ -90,7 +91,14 @@ export class HousesService {
           actor,
           params: {},
         });
-        return house.id;
+        // Người vào cuối làm nhà đủ người thì tin OPEN tự đóng, cùng transaction và cùng khóa dòng nhà.
+        const closed = await closeListingIfFull(
+          tx,
+          house.id,
+          active.length + 1,
+          house.maxMembers,
+        );
+        return { houseId: house.id, closed };
       })
       .catch((error: unknown) => {
         // Cùng một người bấm "Vào nhà" 2 lần cùng lúc: partial unique index chặn dòng thứ hai.
@@ -100,10 +108,17 @@ export class HousesService {
         throw error;
       });
 
+    // Chỉ phát sau khi commit để client nhận event thì DB đã là CLOSED.
+    if (joined.closed) {
+      this.events.emitToHouse(joined.houseId, 'listing:closed', {
+        listingId: joined.closed.listingId,
+        reason: 'FULL',
+      });
+    }
     // Sau commit: socket đang mở của người mới vào room nhà, cả nhà nhận member:joined.
-    await this.events.addMemberToHouse(userId, houseId);
-    outbox.toHouse(houseId, 'member:joined', { userId, name: actor.name }, actor).flush();
-    return this.detail(houseId, 'ROOMMATE');
+    await this.events.addMemberToHouse(userId, joined.houseId);
+    outbox.toHouse(joined.houseId, 'member:joined', { userId, name: actor.name }, actor).flush();
+    return this.detail(joined.houseId, 'ROOMMATE');
   }
 
   /** Các nhà user đang ở (cho house switcher), nhà vào gần nhất đứng đầu. */

@@ -14,6 +14,8 @@ export type ChoreEvent =
 export type ExpenseEvent = 'expense:new' | 'expense:updated' | 'expense:deleted';
 /** Tất toán: `debt:settled` theo đặc tả (chủ nợ xác nhận); báo chuyển / hủy để client tải lại. */
 export type SettlementEvent = 'settlement:requested' | 'settlement:cancelled' | 'debt:settled';
+/** Tin tìm người ở ghép: `listing:closed` khi tin đóng (đủ người hoặc trưởng phòng đóng tay). */
+export type ListingEvent = 'listing:closed';
 export type WheelEvent = 'wheel:spinning' | 'wheel:result' | 'wheel:voided';
 export type SwapEvent =
   | 'swap:requested'
@@ -31,6 +33,7 @@ export type RealtimeEvent =
   | ChoreEvent
   | ExpenseEvent
   | SettlementEvent
+  | ListingEvent
   | WheelEvent
   | SwapEvent
   | DebtEvent

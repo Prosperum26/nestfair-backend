@@ -14,6 +14,7 @@ import { buildGenContext } from '../src/modules/chores/schedule-context.js';
 import { createScheduleRows } from '../src/modules/chores/schedule-store.js';
 import { addDays, currentWeekStart, toDateStr, weekKeyFromStart, weekStartOf } from '../src/modules/chores/week.js';
 import { buildSlices } from '../src/modules/wheel/algorithms/wheel.js';
+import { seedListing } from './seed-listing.js';
 
 const PASSWORD = 'NestFair123';
 const INVITE_CODE = 'K7M2QZ';
@@ -762,6 +763,7 @@ async function main() {
   await seedSwaps(house.id, users);
   await seedExpenses(house.id, users);
   await seedAssistantReminders(house.id, users);
+  await seedListing(prisma, { houseId: house.id, contactPhone: MEMBERS[0].phone });
 
   console.log(
     `Seed xong trong ${Date.now() - started}ms: ${house.name} (mã ${INVITE_CODE}), ` +
