@@ -42,6 +42,7 @@ export type RealtimeEvent =
   | 'presence:update'
   | 'member:joined'
   | 'member:left'
+  | 'member:role_changed'
   | 'rule_proposal:created'
   | 'rule_proposal:decided'
   | 'session:expired'
