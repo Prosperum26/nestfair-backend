@@ -15,6 +15,7 @@ import { ReceiptsModule } from './modules/receipts/receipts.module.js';
 import { RemindersModule } from './modules/reminders/reminders.module.js';
 import { HousesModule } from './modules/houses/houses.module.js';
 import { ListingModule } from './modules/listing/listing.module.js';
+import { MembershipModule } from './modules/membership/membership.module.js';
 import { SchedulerModule } from './modules/scheduler/scheduler.module.js';
 import { SwapsModule } from './modules/swaps/swaps.module.js';
 import { SettlementsModule } from './modules/settlements/settlements.module.js';
@@ -38,6 +39,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     AssistantModule,
     SettlementsModule,
     ListingModule,
+    MembershipModule,
     EventsModule,
     ActivityModule,
     ScheduleModule.forRoot(),

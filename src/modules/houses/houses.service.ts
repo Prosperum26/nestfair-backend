@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   InternalServerErrorException,
@@ -16,6 +17,7 @@ import type {
   HouseDetailDto,
   HouseSummaryDto,
 } from './dto/house-response.dto.js';
+import type { UpdateHouseDto } from './dto/update-house.dto.js';
 import { generateInviteCode, inviteExpiry } from './invite-code.js';
 
 const INVALID_CODE =
@@ -204,6 +206,37 @@ export class HousesService {
         select: { id: true },
       }),
     );
+    return this.detail(houseId, 'ADMIN');
+  }
+
+  /**
+   * Trưởng phòng sửa thông tin nhà. Khóa dòng nhà (cùng khóa với `join`) để
+   * `maxMembers` không thể thấp hơn số người đang ở khi có người vừa vào.
+   */
+  async update(houseId: string, dto: UpdateHouseDto): Promise<HouseDetailDto> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM houses WHERE id = ${houseId}::uuid FOR UPDATE`;
+      if (dto.maxMembers !== undefined) {
+        const active = await tx.houseMember.count({
+          where: { houseId, leftAt: null },
+        });
+        if (dto.maxMembers < active) {
+          throw new BadRequestException(
+            `Nhà đang có ${active} người, số người tối đa không thể thấp hơn.`,
+          );
+        }
+      }
+      await tx.house.update({
+        where: { id: houseId },
+        data: {
+          name: dto.name,
+          maxMembers: dto.maxMembers,
+          // Chuỗi rỗng nghĩa là xóa.
+          address: dto.address === undefined ? undefined : dto.address || null,
+          rules: dto.rules === undefined ? undefined : dto.rules || null,
+        },
+      });
+    });
     return this.detail(houseId, 'ADMIN');
   }
 

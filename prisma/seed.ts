@@ -483,6 +483,8 @@ async function seedExpenses(houseId: string, users: Record<string, { id: string 
   const exact = (amounts: Record<string, number>) => Object.entries(amounts).map(([k, amount]) => ({ k, amount }));
 
   await prisma.settlement.deleteMany({ where: { houseId } });
+  // Điều chỉnh số dư khi xóa thành viên (Issue quản lý nhà): seed lại thì sổ về đúng số liệu thiết kế.
+  await prisma.balanceAdjustment.deleteMany({ where: { houseId } });
   // Xóa scan trước: khóa ngoại expenseId là SetNull nên scan cũ sẽ mồ côi nếu để lại khi chạy seed lần hai.
   await prisma.receiptScan.deleteMany({ where: { houseId } });
   await prisma.expense.deleteMany({ where: { houseId } });
@@ -735,6 +737,8 @@ async function main() {
     rules:
       'Đổ rác trước 21:00. Khách ở qua đêm báo trước trong nhóm. Tiền điện nước chia đều, chốt ngày 05 hằng tháng.',
   };
+  // Đề xuất nội quy cũ bỏ đi để nội quy demo về đúng bản trên.
+  await prisma.ruleProposal.deleteMany({ where: { house: { inviteCode: INVITE_CODE } } });
   const house = await prisma.house.upsert({
     where: { inviteCode: INVITE_CODE },
     update: houseData,

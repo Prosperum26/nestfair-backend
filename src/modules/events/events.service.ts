@@ -42,6 +42,9 @@ export type RealtimeEvent =
   | 'presence:update'
   | 'member:joined'
   | 'member:left'
+  | 'member:role_changed'
+  | 'rule_proposal:created'
+  | 'rule_proposal:decided'
   | 'session:expired'
   | 'reminder:due';
 
@@ -202,7 +205,8 @@ export class EventsService {
    * Người rời nhận `member:left` qua room user của mình để client về /onboarding.
    * Issue #3 gọi hàm này khi có API rời nhà.
    */
-  async removeMemberFromHouse(userId: string, houseId: string, name: string) {
+  /** `kicked`: trưởng phòng xóa (client của người đó báo và rời trang); false: tự rời (client tự xử lý). */
+  async removeMemberFromHouse(userId: string, houseId: string, name: string, kicked = false) {
     if (!this.server) return;
     try {
       const sockets = await this.server.in(userRoom(userId)).fetchSockets();
@@ -213,7 +217,7 @@ export class EventsService {
     } catch (e) {
       this.logger.warn(`Không đá được socket của ${userId} khỏi nhà ${houseId}: ${(e as Error).message}`);
     }
-    const payload = { userId, name };
+    const payload = { userId, name, kicked };
     this.emitToHouse(houseId, 'member:left', payload);
     this.emitToUser(userId, 'member:left', payload, { houseId });
   }

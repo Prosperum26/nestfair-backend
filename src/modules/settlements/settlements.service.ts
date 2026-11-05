@@ -3,7 +3,7 @@ import { coded } from '../../common/coded-exception.js';
 import { toBankAccountName } from '../../common/text.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { computeNetBalances, minCashFlow, pairwiseDebts } from '../expenses/algorithms/min-cash-flow.js';
-import { LedgerService } from '../expenses/ledger.service.js';
+import { balanceMoves, LedgerService } from '../expenses/ledger.service.js';
 import type { HouseMembership } from '../houses/guards/house-member.guard.js';
 import type { PaymentInfoDto, SettlementPlanDto } from './dto/settlement-plan.dto.js';
 
@@ -21,7 +21,7 @@ export class SettlementsService {
    * số dư ròng, nợ chéo từng cặp cho sơ đồ "Trước" và kết quả Min Cash Flow cho sơ đồ "Sau".
    */
   async plan(m: HouseMembership): Promise<SettlementPlanDto> {
-    const [{ expenses, settlements }, memberships] = await Promise.all([
+    const [ledger, memberships] = await Promise.all([
       this.ledger.load(m.houseId),
       this.prisma.houseMember.findMany({
         where: { houseId: m.houseId },
@@ -31,8 +31,10 @@ export class SettlementsService {
     ]);
 
     const activeIds = memberships.filter((x) => x.leftAt === null).map((x) => x.userId);
-    const net = computeNetBalances(expenses, settlements, activeIds);
-    const raw = pairwiseDebts(expenses, settlements);
+    const { expenses, settlements } = ledger;
+    const moves = balanceMoves(ledger);
+    const net = computeNetBalances(expenses, moves, activeIds);
+    const raw = pairwiseDebts(expenses, moves);
     const optimized = minCashFlow(net);
     const pending = settlements.filter((s) => s.status === 'PENDING');
 
@@ -40,7 +42,8 @@ export class SettlementsService {
     const users = new Map<string, { id: string; fullName: string; avatarUrl: string | null; active: boolean }>();
     for (const x of memberships) users.set(x.userId, { ...x.user, active: x.leftAt === null });
     const members = [...users.values()]
-      .filter((u) => u.active || (net.get(u.id) ?? 0) !== 0)
+      // Người đã rời vẫn hiện nếu còn số dư, hoặc còn cạnh trong sơ đồ nợ chéo (đã được điều chỉnh về 0 khi bị xóa).
+      .filter((u) => u.active || (net.get(u.id) ?? 0) !== 0 || raw.some((t) => t.from === u.id || t.to === u.id))
       .map((u) => ({ ...u, net: net.get(u.id) ?? 0 }));
 
     return {
