@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import { ScheduleService } from '../src/modules/chores/schedule.service.js';
 import { EventsService } from '../src/modules/events/events.service.js';
 import { HOUR, makeAssignment } from './support/assignment-fixture.js';
 import { createFixture, type TestUser } from './support/house-fixture.js';
@@ -232,6 +233,22 @@ describe('Rời nhà, xóa thành viên, chuyển quyền (e2e)', () => {
       const row = await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: future.id } });
       expect(row).toMatchObject({ status: 'UNASSIGNED', assigneeId: null, originalAssigneeId: h.memberId(h.Q) });
       expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: done.id } })).status).toBe('DONE');
+    });
+
+    it('ca để trống: cron chia ca mồ côi không đụng tới, trưởng phòng giao lại bằng thao tác REASSIGN có sẵn', async () => {
+      const h = await house4();
+      const slot = await makeAssignment(fx, h, { assignee: 3, dueAt: new Date(Date.now() + 48 * HOUR) });
+      await kick(h.H.token, h.houseId, h.Q.id, { shifts: 'MANUAL' }).expect(200);
+
+      await fx.app.get(ScheduleService).reassignOrphans(h.houseId);
+      expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: slot.id } })).status).toBe('UNASSIGNED');
+
+      await fx
+        .as(h.H.token)
+        .patch(`/api/v1/assignments/${slot.id}/override`, { action: 'REASSIGN', userId: h.T.id, reason: 'Quân đã rời nhà' })
+        .expect(200);
+      const row = await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: slot.id } });
+      expect(row).toMatchObject({ status: 'TODO', assigneeId: h.memberId(h.T) });
     });
 
     it('đóng nợ ca còn OPEN của người bị xóa (cả khi là người nợ lẫn người được làm bù)', async () => {
