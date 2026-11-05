@@ -111,6 +111,7 @@ model House {
   assistantMessages AssistantMessage[]
   reminders Reminder[]
   ruleProposals RuleProposal[]
+  balanceAdjustments BalanceAdjustment[]
 
   @@map("houses")
 }
@@ -174,6 +175,50 @@ model RuleProposal {
 
   @@index([houseId, status, createdAt])
   @@map("rule_proposals")
+}
+
+enum AdjustmentKind {
+  /// Xóa khoản đó: phía ngược lại chịu theo tỷ lệ.
+  WRITE_OFF
+  /// Chuyển số dư cho một thành viên khác.
+  TRANSFER
+}
+
+/// Bút toán điều chỉnh số dư khi trưởng phòng xóa một người còn nợ / chưa nhận khỏi nhà.
+/// Không sửa Expense hay Settlement cũ; các dòng (lines) được cộng vào số dư như settlement đã xác nhận.
+model BalanceAdjustment {
+  id          String         @id @default(uuid()) @db.Uuid
+  houseId     String         @db.Uuid
+  /// Người bị xóa khỏi nhà có số dư được xử lý.
+  userId      String         @db.Uuid
+  kind        AdjustmentKind
+  /// TRANSFER: người nhận phần số dư.
+  toUserId    String?        @db.Uuid
+  /// Số dư ròng của userId lúc xử lý (dương = được nhận, âm = cần trả). Khác 0.
+  amount      Int
+  createdById String         @db.Uuid
+  createdAt   DateTime       @default(now())
+
+  house House                   @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  lines BalanceAdjustmentLine[]
+
+  @@index([houseId, createdAt])
+  @@map("balance_adjustments")
+}
+
+/// Một dòng điều chỉnh: fromUserId +amount, toUserId −amount (như settlement CONFIRMED). amount > 0.
+model BalanceAdjustmentLine {
+  id           String @id @default(uuid()) @db.Uuid
+  adjustmentId String @db.Uuid
+  houseId      String @db.Uuid
+  fromUserId   String @db.Uuid
+  toUserId     String @db.Uuid
+  amount       Int
+
+  adjustment BalanceAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+
+  @@index([houseId])
+  @@map("balance_adjustment_lines")
 }
 
 enum ChoreFrequency {
