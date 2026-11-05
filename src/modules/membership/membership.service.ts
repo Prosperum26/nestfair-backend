@@ -33,6 +33,7 @@ interface ActiveMember {
 /** Kết quả transaction rời / xóa, để làm phần sau commit (đá socket, chia ca, phát sự kiện). */
 interface Removed {
   member: ActiveMember;
+  kicked: boolean;
   adjustment: { kind: AdjustmentKind; amount: number; toUserId: string | null } | null;
   shifts: ShiftMode;
   futureShifts: number;
@@ -277,6 +278,7 @@ export class MembershipService {
     });
     return {
       member,
+      kicked: opts.kicked,
       adjustment: null,
       shifts: opts.shifts,
       futureShifts: future.length,
@@ -287,7 +289,7 @@ export class MembershipService {
 
   /** Sau commit: đá socket khỏi room nhà, phát sự kiện, chia ca mồ côi (AUTO). */
   private async afterRemove(houseId: string, r: Removed, outbox: Outbox, actor: EventActor, now: Date): Promise<RemoveMemberResultDto> {
-    await this.events.removeMemberFromHouse(r.member.userId, houseId, r.member.fullName);
+    await this.events.removeMemberFromHouse(r.member.userId, houseId, r.member.fullName, r.kicked);
     for (const s of r.cancelledSettlements) outbox.toHouse(houseId, 'settlement:cancelled', { settlementId: s.id, fromUserId: s.fromUserId, toUserId: s.toUserId }, actor);
     if (r.unassignedIds.length > 0) outbox.toHouse(houseId, 'chore:reassigned', { assignmentIds: r.unassignedIds }, actor);
     outbox.flush();

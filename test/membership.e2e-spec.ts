@@ -88,7 +88,7 @@ describe('Rời nhà, xóa thành viên, chuyển quyền (e2e)', () => {
 
       expect(await isActive(h.houseId, h.T.id)).toBe(false);
       await fx.as(h.T.token).get(url(h.houseId)).expect(403);
-      expect(kicked).toHaveBeenCalledWith(h.T.id, h.houseId, 'Thiện');
+      expect(kicked).toHaveBeenCalledWith(h.T.id, h.houseId, 'Thiện', false);
       const activity = await fx.prisma.houseActivity.findFirst({ where: { houseId: h.houseId, type: 'member.left' } });
       expect(activity?.params).toMatchObject({ userId: h.T.id, name: 'Thiện', kicked: false });
     });
@@ -139,9 +139,11 @@ describe('Rời nhà, xóa thành viên, chuyển quyền (e2e)', () => {
   });
 
   describe('DELETE /members/:userId (trưởng phòng xóa thành viên)', () => {
-    it('hết nợ thì xóa ngay', async () => {
+    it('hết nợ thì xóa ngay, client của người bị xóa được báo là bị xóa', async () => {
       const h = await house4();
+      const kicked = vi.spyOn(fx.app.get(EventsService), 'removeMemberFromHouse');
       await kick(h.H.token, h.houseId, h.Q.id).expect(200);
+      expect(kicked).toHaveBeenCalledWith(h.Q.id, h.houseId, 'Quân', true);
       expect(await isActive(h.houseId, h.Q.id)).toBe(false);
       await fx.as(h.Q.token).get(url(h.houseId)).expect(403);
       const activity = await fx.prisma.houseActivity.findFirst({ where: { houseId: h.houseId, type: 'member.left' } });
