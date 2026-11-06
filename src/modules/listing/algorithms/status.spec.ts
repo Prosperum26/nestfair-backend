@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { missingPhotos, nextStatus } from './status.js';
+import { missingPhotos, nextStatus, shouldReopenAfterFull } from './status.js';
 
 describe('nextStatus', () => {
   const ok = { slotsOpen: 1, missing: [] as string[] };
@@ -94,5 +94,24 @@ describe('missingPhotos', () => {
         { category: 'LIVING' },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe('shouldReopenAfterFull', () => {
+  it('tin đóng vì đủ người, nay còn chỗ → mở lại', () => {
+    expect(shouldReopenAfterFull({ status: 'CLOSED', closeReason: 'FULL', slotsOpen: 1 })).toBe(true);
+  });
+
+  it('nhà vẫn đủ người → giữ nguyên', () => {
+    expect(shouldReopenAfterFull({ status: 'CLOSED', closeReason: 'FULL', slotsOpen: 0 })).toBe(false);
+  });
+
+  it('trưởng phòng tự đóng (MANUAL) thì không tự mở lại dù còn chỗ', () => {
+    expect(shouldReopenAfterFull({ status: 'CLOSED', closeReason: 'MANUAL', slotsOpen: 2 })).toBe(false);
+  });
+
+  it('tin đang OPEN hoặc DRAFT không có gì để mở lại', () => {
+    expect(shouldReopenAfterFull({ status: 'OPEN', closeReason: null, slotsOpen: 2 })).toBe(false);
+    expect(shouldReopenAfterFull({ status: 'DRAFT', closeReason: null, slotsOpen: 2 })).toBe(false);
   });
 });

@@ -87,6 +87,8 @@ model House {
   inviteCode      String   @unique
   inviteExpiresAt DateTime
   rules           String?
+  /// Giải tán nhà: mềm, không xóa cascade. Mọi thành viên đã có leftAt, mã mời hết hạn, cron bỏ qua nhà này.
+  dissolvedAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

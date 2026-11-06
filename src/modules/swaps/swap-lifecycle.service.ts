@@ -43,6 +43,13 @@ export class SwapLifecycleService {
     return this.closeAll(tx, outbox, rows.map((r) => r.id), () => resolution);
   }
 
+  /** Mọi yêu cầu PENDING của cả nhà (giải tán nhà). */
+  async cancelAllPendingInHouse(tx: Db, outbox: Outbox, houseId: string, resolution: 'MEMBER_LEFT'): Promise<string[]> {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM chore_swap_requests WHERE status = 'PENDING' AND "houseId" = ${houseId}::uuid ORDER BY id FOR UPDATE`;
+    return this.closeAll(tx, outbox, rows.map((r) => r.id), () => resolution);
+  }
+
   /** Mọi yêu cầu PENDING có ca thuộc tuần `weekStart` của nhà (Admin dọn trước khi re-roll). */
   async cancelPendingInWeek(tx: Db, outbox: Outbox, houseId: string, weekStart: Date, resolution: SwapResolution): Promise<string[]> {
     const slots = await tx.choreAssignment.findMany({ where: { houseId, weekStart }, select: { id: true } });

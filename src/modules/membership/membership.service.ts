@@ -9,6 +9,7 @@ import { actorOfUser } from '../events/actor.js';
 import { type EventActor, EventsService, type Outbox } from '../events/events.service.js';
 import { LedgerService } from '../expenses/ledger.service.js';
 import type { HouseMembership } from '../houses/guards/house-member.guard.js';
+import { reopenListingIfRoom } from '../listing/reopen-if-room.js';
 import { SwapLifecycleService } from '../swaps/swap-lifecycle.service.js';
 import { planAdjustment } from './algorithms/balance-adjustment.js';
 import type {
@@ -39,6 +40,8 @@ interface Removed {
   futureShifts: number;
   unassignedIds: string[];
   cancelledSettlements: { id: string; fromUserId: string; toUserId: string }[];
+  /** Tin tìm người ở ghép vừa mở lại vì nhà hết đủ người. */
+  reopenedListingId: string | null;
 }
 
 const lockHouse = (tx: Tx, houseId: string) => tx.$queryRaw`SELECT id FROM houses WHERE id = ${houseId}::uuid FOR UPDATE`;
@@ -270,6 +273,9 @@ export class MembershipService {
     }
 
     await tx.houseMember.update({ where: { id: member.id }, data: { leftAt: now } });
+    const house = await tx.house.findUniqueOrThrow({ where: { id: houseId }, select: { maxMembers: true } });
+    const remaining = await tx.houseMember.count({ where: { houseId, leftAt: null } });
+    const reopened = await reopenListingIfRoom(tx, houseId, remaining, house.maxMembers);
     await this.activity.record(tx, outbox, {
       houseId,
       type: 'member.left',
@@ -284,6 +290,7 @@ export class MembershipService {
       futureShifts: future.length,
       unassignedIds: opts.shifts === 'MANUAL' ? future.map((a) => a.id) : [],
       cancelledSettlements,
+      reopenedListingId: reopened?.listingId ?? null,
     };
   }
 
@@ -292,6 +299,7 @@ export class MembershipService {
     await this.events.removeMemberFromHouse(r.member.userId, houseId, r.member.fullName, r.kicked);
     for (const s of r.cancelledSettlements) outbox.toHouse(houseId, 'settlement:cancelled', { settlementId: s.id, fromUserId: s.fromUserId, toUserId: s.toUserId }, actor);
     if (r.unassignedIds.length > 0) outbox.toHouse(houseId, 'chore:reassigned', { assignmentIds: r.unassignedIds }, actor);
+    if (r.reopenedListingId) outbox.toHouse(houseId, 'listing:reopened', { listingId: r.reopenedListingId }, actor);
     outbox.flush();
 
     if (r.shifts === 'AUTO' && r.futureShifts > 0) {

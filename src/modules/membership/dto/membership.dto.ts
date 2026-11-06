@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsIn, IsOptional, IsUUID } from 'class-validator';
+import { IsEnum, IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { AdjustmentKind, HouseRole } from '../../../generated/prisma/enums.js';
 
 /** Ca tương lai của người rời nhà: hệ thống tự chia (S-18) hay để trống cho trưởng phòng gán. */
@@ -65,4 +65,18 @@ export class RemoveMemberResultDto {
 
 export class TransferAdminResultDto {
   @ApiProperty({ format: 'uuid' }) adminUserId: string;
+}
+
+export class DissolveHouseDto {
+  @ApiProperty({ description: 'Gõ lại đúng tên nhà để xác nhận giải tán' })
+  @IsString({ message: 'Hãy gõ tên nhà để xác nhận.' })
+  @IsNotEmpty({ message: 'Hãy gõ tên nhà để xác nhận.' })
+  @MaxLength(120)
+  confirmName: string;
+}
+
+export class DissolveHouseResultDto {
+  @ApiProperty({ format: 'uuid' }) houseId: string;
+  @ApiProperty({ description: 'Số thành viên đã được cho rời nhà' }) members: number;
+  @ApiProperty({ description: 'Số ảnh Cloudinary đã dọn (ảnh minh chứng, hóa đơn, tin đăng)' }) imagesRemoved: number;
 }

@@ -12,6 +12,7 @@ import { ActivityService } from '../activity/activity.service.js';
 import { actorOfUser } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { closeListingIfFull } from '../listing/close-if-full.js';
+import { reopenListingIfRoom } from '../listing/reopen-if-room.js';
 import type { CreateHouseDto } from './dto/create-house.dto.js';
 import type {
   HouseDetailDto,
@@ -66,7 +67,7 @@ export class HousesService {
         const [house] = await tx.$queryRaw<
           { id: string; maxMembers: number; inviteExpiresAt: Date }[]
         >`SELECT id, "maxMembers", "inviteExpiresAt" FROM houses
-          WHERE "inviteCode" = ${inviteCode} FOR UPDATE`;
+          WHERE "inviteCode" = ${inviteCode} AND "dissolvedAt" IS NULL FOR UPDATE`;
         if (!house || house.inviteExpiresAt <= new Date()) {
           throw new NotFoundException(INVALID_CODE);
         }
@@ -214,7 +215,7 @@ export class HousesService {
    * `maxMembers` không thể thấp hơn số người đang ở khi có người vừa vào.
    */
   async update(houseId: string, dto: UpdateHouseDto): Promise<HouseDetailDto> {
-    await this.prisma.$transaction(async (tx) => {
+    const reopened = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM houses WHERE id = ${houseId}::uuid FOR UPDATE`;
       if (dto.maxMembers !== undefined) {
         const active = await tx.houseMember.count({
@@ -236,7 +237,12 @@ export class HousesService {
           rules: dto.rules === undefined ? undefined : dto.rules || null,
         },
       });
+      // Nâng sức chứa làm nhà còn chỗ thì tin đóng vì đủ người mở lại (cùng khóa dòng nhà).
+      if (dto.maxMembers === undefined) return null;
+      const memberCount = await tx.houseMember.count({ where: { houseId, leftAt: null } });
+      return reopenListingIfRoom(tx, houseId, memberCount, dto.maxMembers);
     });
+    if (reopened) this.events.emitToHouse(houseId, 'listing:reopened', { listingId: reopened.listingId });
     return this.detail(houseId, 'ADMIN');
   }
 
