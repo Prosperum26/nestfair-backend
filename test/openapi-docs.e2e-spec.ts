@@ -19,9 +19,6 @@ import { API_TAGS, buildOpenApiDocument, setupSwagger } from './../src/swagger.s
 const PENDING_TAGS = new Set<string>([
   'wheel',
   'activity',
-  'expenses',
-  'settlements',
-  'receipts',
   'assistant',
   'reminders',
   'listings',

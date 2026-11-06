@@ -7,32 +7,81 @@ const FAILURE_REASONS: ScanFailureReason[] = ['NOT_A_RECEIPT', 'UNREADABLE', 'AI
 
 /** Chỉ dùng cho Swagger; dữ liệu thật do `sanitizeReceipt` tạo. */
 export class DraftItemDto implements DraftItem {
-  @ApiProperty({ example: 'Trứng gà hộp 10' }) name: string;
-  @ApiProperty({ example: 1, description: 'Có thể lẻ (0,5 kg)' }) quantity: number;
-  @ApiProperty({ example: 32_000, description: 'Thành tiền, số nguyên VNĐ' }) lineTotal: number;
-  @ApiProperty({ description: 'AI không chắc về dòng này: giao diện tô vàng và yêu cầu người dùng gán người dùng món' }) uncertain: boolean;
-  @ApiProperty({ type: String, nullable: true, example: 'Số lượng bị mờ' }) note: string | null;
+  @ApiProperty({ example: 'Eggs, box of 10', description: 'Item name as read from the receipt.' })
+  name: string;
+
+  @ApiProperty({ example: 1, description: 'Quantity; may be fractional (for example 0.5 kg).' })
+  quantity: number;
+
+  @ApiProperty({ example: 32_000, description: 'Line total in integer VND.' })
+  lineTotal: number;
+
+  @ApiProperty({ description: 'true when the AI was not sure about this line; the UI highlights it and asks the user to review it and assign who shares the item.' })
+  uncertain: boolean;
+
+  @ApiProperty({ type: String, nullable: true, example: 'Quantity is blurry', description: 'Short remark from the AI about the line, or null.' })
+  note: string | null;
 }
 
 export class DraftWarningDto implements DraftWarning {
-  @ApiProperty({ enum: WARNING_CODES, enumName: 'DraftWarningCode' }) code: DraftWarningCode;
-  @ApiProperty() message: string;
+  @ApiProperty({
+    enum: WARNING_CODES,
+    enumName: 'DraftWarningCode',
+    description:
+      '`ITEMS_TOTAL_MISMATCH` (items differ from the total by more than 2%), `DATE_MISSING` (no date could be read), `DATE_IN_FUTURE` (date discarded), `DROPPED_ITEMS` (unreadable or invalid lines were removed) or `AI_NOTE` (a remark from the AI).',
+  })
+  code: DraftWarningCode;
+
+  @ApiProperty({ description: 'Localized (Vietnamese) sentence to show to the user.' })
+  message: string;
 }
 
 export class ReceiptDraftDto implements ReceiptDraft {
-  @ApiProperty({ example: 'Bách Hóa Xanh' }) merchant: string;
-  @ApiProperty({ type: String, nullable: true, example: '2026-10-06', description: 'YYYY-MM-DD; null nếu không đọc được hoặc ở tương lai' }) purchasedAt: string | null;
-  @ApiProperty({ type: [DraftItemDto] }) items: DraftItemDto[];
-  @ApiProperty({ example: 245_000, description: 'Tổng thực trả, số nguyên VNĐ; không tách thuế' }) total: number;
-  @ApiProperty({ type: [DraftWarningDto] }) warnings: DraftWarningDto[];
+  @ApiProperty({ example: 'Bach Hoa Xanh', description: 'Store or merchant name read from the receipt.' })
+  merchant: string;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: '2026-10-06',
+    description: 'Purchase date (YYYY-MM-DD); null when it could not be read or lies in the future.',
+  })
+  purchasedAt: string | null;
+
+  @ApiProperty({ type: [DraftItemDto], description: 'Line items read from the receipt.' })
+  items: DraftItemDto[];
+
+  @ApiProperty({ example: 245_000, description: 'Total actually paid in integer VND. Tax is not separated out.' })
+  total: number;
+
+  @ApiProperty({ type: [DraftWarningDto], description: 'Problems the user should check before saving; empty when the draft looks consistent.' })
+  warnings: DraftWarningDto[];
 }
 
 export class ReceiptScanResultDto {
-  @ApiProperty({ format: 'uuid', description: 'Truyền vào POST /expenses (receiptScanId) khi người dùng bấm Lưu' }) scanId: string;
-  @ApiProperty({ description: 'Ảnh đã tải lên Cloudinary (dùng làm ảnh hóa đơn của khoản chi)' }) imageUrl: string;
-  @ApiProperty({ description: 'Thời gian đọc hóa đơn (ms)' }) latencyMs: number;
-  @ApiProperty({ enum: ['DRAFT', 'MANUAL'], description: 'DRAFT: có bản nháp để xác nhận. MANUAL: không đọc được, mở form nhập tay (ảnh vẫn dùng được)' }) mode: 'DRAFT' | 'MANUAL';
-  @ApiProperty({ enum: FAILURE_REASONS, enumName: 'ScanFailureReason', nullable: true }) reason: ScanFailureReason | null;
-  @ApiProperty({ type: String, nullable: true, description: 'Câu tiếng Việt giải thích khi MANUAL' }) message: string | null;
-  @ApiProperty({ type: ReceiptDraftDto, nullable: true, description: 'Chỉ là bản nháp: chưa phải khoản chi' }) draft: ReceiptDraftDto | null;
+  @ApiProperty({ format: 'uuid', description: 'Id of this scan. Send it as `receiptScanId` to POST /houses/{houseId}/expenses when the user confirms the draft.' })
+  scanId: string;
+
+  @ApiProperty({ description: 'URL of the uploaded receipt photo; it can be used as the expense\'s receipt image.' })
+  imageUrl: string;
+
+  @ApiProperty({ description: 'Time spent reading the receipt, in milliseconds.' })
+  latencyMs: number;
+
+  @ApiProperty({ enum: ['DRAFT', 'MANUAL'], description: '`DRAFT` = a draft is available for the user to confirm. `MANUAL` = the receipt could not be read; open the manual entry form (the photo is still usable).' })
+  mode: 'DRAFT' | 'MANUAL';
+
+  @ApiProperty({
+    enum: FAILURE_REASONS,
+    enumName: 'ScanFailureReason',
+    nullable: true,
+    description: 'Why the scan fell back to MANUAL: `NOT_A_RECEIPT`, `UNREADABLE`, `AI_TIMEOUT` (over 10 seconds) or `AI_UNAVAILABLE`. null when mode is DRAFT.',
+  })
+  reason: ScanFailureReason | null;
+
+  @ApiProperty({ type: String, nullable: true, description: 'Localized (Vietnamese) sentence explaining a MANUAL result, or null.' })
+  message: string | null;
+
+  @ApiProperty({ type: ReceiptDraftDto, nullable: true, description: 'The extracted draft. It is only a suggestion and is not saved as an expense until the user confirms. null when mode is MANUAL.' })
+  draft: ReceiptDraftDto | null;
 }

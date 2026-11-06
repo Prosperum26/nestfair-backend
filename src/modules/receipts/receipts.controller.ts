@@ -5,14 +5,11 @@ import {
   ApiBody,
   ApiConsumes,
   ApiCreatedResponse,
-  ApiForbiddenResponse,
   ApiOperation,
   ApiParam,
-  ApiServiceUnavailableResponse,
   ApiTags,
-  ApiTooManyRequestsResponse,
-  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { ApiErrors } from '../../common/swagger/api-errors.decorator.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentMembership } from '../houses/decorators/current-membership.decorator.js';
 import { type HouseMembership, HouseMemberGuard } from '../houses/guards/house-member.guard.js';
@@ -25,8 +22,8 @@ const HARD_LIMIT_BYTES = 10 * 1024 * 1024;
 
 @ApiTags('receipts')
 @ApiBearerAuth()
-@ApiUnauthorizedResponse()
-@ApiParam({ name: 'houseId', format: 'uuid' })
+@ApiErrors(401)
+@ApiParam({ name: 'houseId', format: 'uuid', description: 'Id of the house.' })
 @UseGuards(JwtAuthGuard, HouseMemberGuard)
 @Controller('houses/:houseId/expenses')
 export class ReceiptsController {
@@ -39,20 +36,29 @@ export class ReceiptsController {
     schema: {
       type: 'object',
       required: ['photo'],
-      properties: { photo: { type: 'string', format: 'binary', description: 'Ảnh hóa đơn JPG/PNG/WEBP, tối đa 5MB (client nén ≤ 1MB, cạnh dài ≤ 1600px)' } },
+      properties: { photo: { type: 'string', format: 'binary', description: 'Receipt photo: JPEG, PNG or WebP, up to 5 MB. The web client compresses it to about 1 MB with the long side at most 1600 px before sending.' } },
     },
   })
   @ApiOperation({
-    summary: 'Quét hóa đơn bằng Gemini Vision thành bản nháp khoản chi (KHÔNG lưu khoản chi)',
+    summary: 'Scan a receipt into an expense draft',
     description:
-      'Cần người dùng đã đồng ý gửi ảnh tới Google Gemini (PATCH /users/me/ocr-consent). Tối đa 20 lượt quét mỗi nhà mỗi ngày (giờ VN). ' +
-      'Ảnh mờ, không phải hóa đơn hoặc Gemini lỗi/quá 10 giây thì vẫn trả 201 với mode = MANUAL để mở form nhập tay. ' +
-      'Khi người dùng xác nhận, gọi POST /expenses với receiptScanId.',
+      'Uploads a receipt photo, reads it with Gemini Vision and returns a DRAFT of the expense: merchant, date, line items and the total paid. ' +
+      'Nothing is saved to the ledger by this call; the AI never writes data. The user reviews the draft and, on confirmation, the client calls ' +
+      '`POST /houses/{houseId}/expenses` with the returned `scanId` as `receiptScanId`. ' +
+      'The user must first consent to sending images to Google Gemini (`PATCH /users/me/ocr-consent`). A house may scan 20 receipts per day (Vietnam time). ' +
+      'Every returned draft is sanity-checked: if the items differ from the total by more than 2% a warning is added. ' +
+      'If the photo is blurry, is not a receipt, or Gemini fails or takes longer than 10 seconds, the call still succeeds with 201 and `mode` set to `MANUAL` ' +
+      'so the client can open the manual entry form with the photo already uploaded. Only the total paid is read; tax is not separated out.',
   })
-  @ApiCreatedResponse({ type: ReceiptScanResultDto })
-  @ApiForbiddenResponse({ description: 'OCR_CONSENT_REQUIRED (chưa đồng ý) hoặc không phải thành viên nhà này' })
-  @ApiTooManyRequestsResponse({ description: 'OCR_QUOTA_EXCEEDED: nhà đã dùng hết 20 lượt quét hôm nay' })
-  @ApiServiceUnavailableResponse({ description: 'UPLOAD_UNAVAILABLE: chưa cấu hình / lỗi Cloudinary' })
+  @ApiCreatedResponse({ type: ReceiptScanResultDto, description: 'A draft to confirm (`mode` DRAFT), or a manual-entry fallback (`mode` MANUAL).' })
+  @ApiErrors(
+    [400, 'Code `PROOF_REQUIRED`: no `photo` file was sent.'],
+    [403, 'Code `OCR_CONSENT_REQUIRED` (the user has not consented to Gemini) or the caller is not a member of this house.'],
+    [413, 'Code `IMAGE_TOO_LARGE`: the image is larger than 5 MB.'],
+    [415, 'Code `UNSUPPORTED_IMAGE`: the file is not a JPEG, PNG or WebP image.'],
+    [429, 'Code `OCR_QUOTA_EXCEEDED`: the house already used its 20 scans today.'],
+    [503, 'Code `UPLOAD_UNAVAILABLE`: image storage is not configured or failed.'],
+  )
   scan(@CurrentMembership() m: HouseMembership, @UploadedFile() file: UploadedImage | undefined): Promise<ReceiptScanResultDto> {
     return this.receipts.scan(m, file);
   }
