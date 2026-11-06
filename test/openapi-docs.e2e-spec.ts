@@ -93,6 +93,14 @@ describe('OpenAPI document (docs audit)', () => {
     expect(report(offenders)).toBe('');
   });
 
+  it('only references security schemes that the document declares', () => {
+    const schemes = new Set(Object.keys(doc.components?.securitySchemes ?? {}));
+    const offenders = ops.flatMap(({ id, op }) =>
+      (op.security ?? []).flatMap((req) => Object.keys(req as Record<string, unknown>)).filter((name) => !schemes.has(name)).map((name) => `${id}: ${name}`),
+    );
+    expect(report(offenders)).toBe('');
+  });
+
   it('describes every path and query parameter', () => {
     const offenders = ops.flatMap(({ id, op }) =>
       (op.parameters ?? []).filter((p) => !p.description?.trim()).map((p) => `${id} (${p.in}) ${p.name}`),

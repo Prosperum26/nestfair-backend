@@ -150,7 +150,7 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiCookieAuth(REFRESH_COOKIE)
+  @ApiCookieAuth()
   @ApiOperation({
     summary: 'Change password',
     description:
