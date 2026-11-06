@@ -101,6 +101,18 @@ describe('OpenAPI document (docs audit)', () => {
     expect(report(offenders)).toBe('');
   });
 
+  it('shows an error example whose statusCode matches the response status', () => {
+    const offenders: string[] = [];
+    for (const { id, op } of ops) {
+      for (const [code, res] of Object.entries(op.responses ?? {})) {
+        if (!/^[45]/.test(code)) continue;
+        const schema = res.content?.['application/json']?.schema as { example?: { statusCode?: number } } | undefined;
+        if (schema?.example?.statusCode !== Number(code)) offenders.push(`${id} ${code}`);
+      }
+    }
+    expect(report(offenders)).toBe('');
+  });
+
   it('describes every path and query parameter', () => {
     const offenders = ops.flatMap(({ id, op }) =>
       (op.parameters ?? []).filter((p) => !p.description?.trim()).map((p) => `${id} (${p.in}) ${p.name}`),

@@ -17,7 +17,6 @@ import {
   ApiCreatedResponse,
   ApiFoundResponse,
   ApiNoContentResponse,
-  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -207,7 +206,7 @@ export class AuthController {
       'page navigation, not with fetch or XHR. Available only when the server has Google credentials configured.',
   })
   @ApiFoundResponse({ description: 'Redirect to accounts.google.com.' })
-  @ApiNotFoundResponse({ description: 'Google sign-in is not configured on this server.' })
+  @ApiErrors([404, 'Google sign-in is not configured on this server.'])
   googleStart(): void {
     // GoogleStartGuard (passport) đã chuyển hướng.
   }
