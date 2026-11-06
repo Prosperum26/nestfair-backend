@@ -206,7 +206,7 @@ export class ScheduleService {
    * khi đã qua Chủ Nhật 20:00 giờ nhà. Trả số lịch mới tạo.
    */
   async catchUpAll(now: Date = new Date(), houseIds?: string[]): Promise<number> {
-    const ids = houseIds ?? (await this.prisma.house.findMany({ select: { id: true } })).map((h) => h.id);
+    const ids = houseIds ?? (await this.prisma.house.findMany({ where: { dissolvedAt: null }, select: { id: true } })).map((h) => h.id);
     const cur = currentWeekStart(now);
     const vn = new Date(now.getTime() + 7 * 3_600_000);
     const weeks = vn.getUTCDay() === 0 && vn.getUTCHours() >= 20 ? [cur, addDays(cur, 7)] : [cur];

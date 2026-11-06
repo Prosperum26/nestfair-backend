@@ -72,7 +72,7 @@ export class ChoreCronService implements OnApplicationBootstrap {
   /** Chủ Nhật 20:00 giờ nhà: sinh lịch tuần kế tiếp cho mọi nhà (nhà chưa có việc thì lịch EMPTY, không lỗi). */
   async generateNextWeek(now: Date = new Date(), houseIds?: string[]): Promise<{ houses: number; created: number }> {
     const weekStart = addDays(currentWeekStart(now), 7);
-    const ids = houseIds ?? (await this.prisma.house.findMany({ select: { id: true } })).map((h) => h.id);
+    const ids = houseIds ?? (await this.prisma.house.findMany({ where: { dissolvedAt: null }, select: { id: true } })).map((h) => h.id);
     let houses = 0;
     let created = 0;
     for (const houseId of ids) {

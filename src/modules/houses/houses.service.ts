@@ -67,7 +67,7 @@ export class HousesService {
         const [house] = await tx.$queryRaw<
           { id: string; maxMembers: number; inviteExpiresAt: Date }[]
         >`SELECT id, "maxMembers", "inviteExpiresAt" FROM houses
-          WHERE "inviteCode" = ${inviteCode} FOR UPDATE`;
+          WHERE "inviteCode" = ${inviteCode} AND "dissolvedAt" IS NULL FOR UPDATE`;
         if (!house || house.inviteExpiresAt <= new Date()) {
           throw new NotFoundException(INVALID_CODE);
         }
