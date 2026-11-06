@@ -14,7 +14,7 @@ import { PublicListingClosedDto, type PublicListingDto, PublicListingOpenDto } f
 import { PublicListingService } from './public-listing.service.js';
 
 /** Công khai, không JWT. Giới hạn 60 lần/phút/IP; mỗi lần đọc xong là hết, không ghi gì. */
-@ApiTags('public')
+@ApiTags('public-listings')
 @ApiExtraModels(PublicListingOpenDto, PublicListingClosedDto)
 @UseGuards(ThrottlerGuard)
 @Throttle({ default: { limit: 60, ttl: 60_000 } })

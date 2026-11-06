@@ -49,7 +49,7 @@ import { ListingService } from './listing.service.js';
 /** Multer chặn cứng ở 10MB; validateImageFile trả lỗi 413 thân thiện ở mốc 5MB. */
 const HARD_LIMIT_BYTES = 10 * 1024 * 1024;
 
-@ApiTags('listing')
+@ApiTags('listings')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse()
 @ApiForbiddenResponse({ description: 'Không phải thành viên nhà này (hoặc không phải trưởng phòng khi ghi)' })

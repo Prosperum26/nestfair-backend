@@ -45,7 +45,7 @@ import { VerifyService } from './verify.service.js';
 const HARD_LIMIT_BYTES = 10 * 1024 * 1024;
 
 /** Route theo ca trực, không có houseId trên URL: nhà được suy ra từ chính ca. */
-@ApiTags('chores')
+@ApiTags('assignments')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse()
 @ApiForbiddenResponse({ description: 'Không phải ca của bạn / không đủ quyền / đã rời nhà' })

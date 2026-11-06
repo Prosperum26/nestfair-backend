@@ -28,7 +28,7 @@ import {
 } from './dto/membership.dto.js';
 import { MembershipService } from './membership.service.js';
 
-@ApiTags('houses')
+@ApiTags('membership')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse()
 @ApiParam({ name: 'houseId', format: 'uuid' })

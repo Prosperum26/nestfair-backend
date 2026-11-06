@@ -30,7 +30,7 @@ import { type HouseMembership, HouseMemberGuard } from './guards/house-member.gu
 import { HouseRoles, HouseRolesGuard } from './guards/house-roles.guard.js';
 import { RuleProposalsService } from './rule-proposals.service.js';
 
-@ApiTags('houses')
+@ApiTags('rule-proposals')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse()
 @ApiParam({ name: 'houseId', format: 'uuid' })

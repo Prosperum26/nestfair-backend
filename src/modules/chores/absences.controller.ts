@@ -22,7 +22,7 @@ import { BreaksService } from './breaks.service.js';
 import { isValidWeekKey, weekStartFromKey } from './week.js';
 
 const COMMON = [
-  ApiTags('chores'),
+  ApiTags('absences'),
   ApiBearerAuth(),
   ApiUnauthorizedResponse(),
   ApiForbiddenResponse({ description: 'Không phải thành viên nhà này (hoặc không đủ quyền)' }),

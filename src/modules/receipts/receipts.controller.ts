@@ -23,7 +23,7 @@ import { ReceiptsService } from './receipts.service.js';
 /** Multer chặn cứng ở 10MB; validateImageFile trả lỗi 413 thân thiện ở mốc 5MB. */
 const HARD_LIMIT_BYTES = 10 * 1024 * 1024;
 
-@ApiTags('expenses')
+@ApiTags('receipts')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse()
 @ApiParam({ name: 'houseId', format: 'uuid' })

@@ -19,7 +19,7 @@ import { AssignmentsService } from './assignments.service.js';
 import { PreviewResultDto, ShuffleResultDto, WeekViewDto } from './dto/assignment-response.dto.js';
 import { ListAssignmentsQuery, PreviewScheduleDto, ShuffleAssignmentsDto } from './dto/week-key.dto.js';
 
-@ApiTags('chores')
+@ApiTags('assignments')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse()
 @ApiForbiddenResponse({ description: 'Không phải thành viên nhà này (hoặc không đủ quyền)' })

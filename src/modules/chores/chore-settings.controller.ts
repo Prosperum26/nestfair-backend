@@ -17,7 +17,7 @@ import { ChoreSettingsService } from './chore-settings.service.js';
 import { ChoreSettingsDto } from './dto/chore-response.dto.js';
 import { UpdateChoreSettingsDto } from './dto/update-chore-settings.dto.js';
 
-@ApiTags('chores')
+@ApiTags('chore-settings')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse()
 @ApiForbiddenResponse({ description: 'Không phải thành viên nhà này (hoặc không đủ quyền)' })

@@ -1,11 +1,15 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { OpenAPIObject } from '@nestjs/swagger';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from './../src/app.module.js';
 import { configureApp } from './../src/app.setup.js';
-import { buildOpenApiDocument, setupSwagger } from './../src/swagger.setup.js';
+import { ERROR_CODES } from './../src/common/swagger/error-codes.js';
+import { SWAP_ERRORS } from './../src/modules/swaps/swap-errors.js';
+import { API_TAGS, buildOpenApiDocument, setupSwagger } from './../src/swagger.setup.js';
 
 /**
  * Audit of the generated OpenAPI document (the page the lecturer reads). It encodes "done" for the API docs:
@@ -13,20 +17,27 @@ import { buildOpenApiDocument, setupSwagger } from './../src/swagger.setup.js';
  * `PENDING_TAGS` lists tags whose documentation is not rewritten yet; it shrinks module by module and ends empty.
  */
 const PENDING_TAGS = new Set<string>([
-  'activity',
-  'assistant',
-  'auth',
-  'chores',
-  'expenses',
   'health',
-  'houses',
-  'listing',
-  'public',
-  'reminders',
-  'settlements',
-  'swaps',
+  'auth',
   'users',
+  'houses',
+  'membership',
+  'rule-proposals',
+  'chores',
+  'chore-settings',
+  'assignments',
+  'absences',
+  'swaps',
+  'chore-debts',
   'wheel',
+  'activity',
+  'expenses',
+  'settlements',
+  'receipts',
+  'assistant',
+  'reminders',
+  'listings',
+  'public-listings',
 ]);
 
 const VIETNAMESE = /[À-ỹ]/;
@@ -125,6 +136,39 @@ describe('OpenAPI document (docs audit)', () => {
       for (const [prop, def] of Object.entries(props)) if (!def.description?.trim()) offenders.push(`${name}.${prop}`);
     }
     expect(report(offenders)).toBe('');
+  });
+
+  it('explains authentication, errors, conventions and realtime in the overview', () => {
+    const text = doc.info.description ?? '';
+    for (const heading of ['## Conventions', '## Authentication', '## Errors', '## Realtime']) expect(text).toContain(heading);
+    expect(doc.servers?.length).toBeGreaterThan(0);
+    expect(VIETNAMESE.test(text)).toBe(false);
+  });
+
+  it('describes every tag in use and keeps API_TAGS in sync with the controllers', () => {
+    const described = new Set((doc.tags ?? []).filter((t) => t.description?.trim()).map((t) => t.name));
+    const used = new Set(ops.map((o) => o.tag));
+    expect([...used].filter((t) => !described.has(t))).toEqual([]);
+    expect(API_TAGS.map(([n]) => n).filter((n) => !used.has(n))).toEqual([]);
+  });
+
+  it('lists every error code the source can throw in the catalogue', () => {
+    const found = new Set<string>(Object.keys(SWAP_ERRORS));
+    const walk = (dir: string) => {
+      for (const f of readdirSync(dir)) {
+        const p = join(dir, f);
+        if (statSync(p).isDirectory()) walk(p);
+        else if (p.endsWith('.ts') && !p.endsWith('spec.ts') && !p.includes('generated')) {
+          const src = readFileSync(p, 'utf8');
+          for (const m of src.matchAll(/coded\(\s*HttpStatus\.[A-Z_]+\s*,\s*'([A-Z][A-Z_0-9]+)'/g)) found.add(m[1]);
+          if (p.endsWith('assistant.service.ts')) for (const m of src.matchAll(/code: '([A-Z][A-Z_0-9]+)'/g)) found.add(m[1]);
+        }
+      }
+    };
+    walk('src');
+    expect([...found].filter((c) => !(c in ERROR_CODES)).sort()).toEqual([]);
+    const overview = doc.info.description ?? '';
+    expect(Object.keys(ERROR_CODES).filter((c) => !overview.includes(`\`${c}\``))).toEqual([]);
   });
 
   it('serves the UI and the JSON document', async () => {

@@ -25,7 +25,7 @@ import { PaybackBodyDto, PaybackOptionsDto, PaybackResultDto } from './dto/payba
 import { SWAP_ERRORS } from './swap-errors.js';
 import { PaybackService } from './payback.service.js';
 
-@ApiTags('swaps')
+@ApiTags('chore-debts')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse()
 @ApiForbiddenResponse({ description: 'Không phải thành viên nhà này' })
@@ -47,7 +47,7 @@ export class ChoreDebtsController {
 }
 
 /** Route theo khoản nợ, không có houseId trên URL: nhà suy ra từ chính khoản nợ. */
-@ApiTags('swaps')
+@ApiTags('chore-debts')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse()
 @ApiForbiddenResponse({ description: 'NOT_CREDITOR: chỉ người được làm bù mới chọn ca bù hoặc tha nợ' })
