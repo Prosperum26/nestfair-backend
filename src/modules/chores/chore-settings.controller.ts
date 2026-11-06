@@ -1,14 +1,12 @@
 import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import {
-  ApiBadRequestResponse,
   ApiBearerAuth,
-  ApiForbiddenResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
-  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { ApiErrors } from '../../common/swagger/api-errors.decorator.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentMembership } from '../houses/decorators/current-membership.decorator.js';
 import { type HouseMembership, HouseMemberGuard } from '../houses/guards/house-member.guard.js';
@@ -19,26 +17,31 @@ import { UpdateChoreSettingsDto } from './dto/update-chore-settings.dto.js';
 
 @ApiTags('chore-settings')
 @ApiBearerAuth()
-@ApiUnauthorizedResponse()
-@ApiForbiddenResponse({ description: 'Không phải thành viên nhà này (hoặc không đủ quyền)' })
-@ApiParam({ name: 'houseId', format: 'uuid' })
+@ApiErrors(401, [403, 'The caller is not an active member of this house, or the action needs the admin role.'])
+@ApiParam({ name: 'houseId', format: 'uuid', description: 'Id of the house.' })
 @UseGuards(JwtAuthGuard, HouseMemberGuard, HouseRolesGuard)
 @Controller('houses/:houseId/chore-settings')
 export class ChoreSettingsController {
   constructor(private readonly settings: ChoreSettingsService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Cài đặt việc nhà: ân hạn nộp muộn và số ca tối đa mỗi người mỗi ngày' })
-  @ApiOkResponse({ type: ChoreSettingsDto })
+  @ApiOperation({
+    summary: 'Get chore settings',
+    description: 'Returns the house-level chore settings: the grace period (hours) for late photo submissions and the maximum number of assignments one person can get per day. Any member can read them.',
+  })
+  @ApiOkResponse({ type: ChoreSettingsDto, description: 'Current settings.' })
   get(@CurrentMembership() m: HouseMembership): Promise<ChoreSettingsDto> {
     return this.settings.get(m.houseId);
   }
 
   @Patch()
   @HouseRoles('ADMIN')
-  @ApiOperation({ summary: 'Trưởng phòng chỉnh cài đặt việc nhà' })
-  @ApiOkResponse({ type: ChoreSettingsDto })
-  @ApiBadRequestResponse({ description: 'Giá trị ngoài khoảng cho phép' })
+  @ApiOperation({
+    summary: 'Update chore settings (admin)',
+    description: 'Partial update of the grace period (1-24 hours) and the per-person daily assignment cap (1-6). The change is recorded in the chore audit log. Admin only.',
+  })
+  @ApiOkResponse({ type: ChoreSettingsDto, description: 'The updated settings.' })
+  @ApiErrors([400, 'A value is outside the allowed range.'])
   update(@CurrentMembership() m: HouseMembership, @Body() dto: UpdateChoreSettingsDto): Promise<ChoreSettingsDto> {
     return this.settings.update(m.houseId, m.id, dto);
   }

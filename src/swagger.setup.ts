@@ -11,7 +11,7 @@ export const API_TAGS: readonly (readonly [name: string, description: string])[]
   ['membership', 'Member lifecycle inside a house: leaving, removing a member, transferring the admin role and dissolving the house.'],
   ['rule-proposals', 'Members propose additions, edits or removals of the house rules; the admin approves or rejects them.'],
   ['chores', 'Chore definitions, the weekly rotating schedule (fair rotation with a 3-week repeat fence), shuffling the week and system chores.'],
-  ['chore-settings', 'House-level chore scheduling settings such as grace periods and auto-verification.'],
+  ['chore-settings', 'House-level chore settings: the grace period for late photo submissions and the maximum number of assignments one person can get per day.'],
   ['assignments', 'A single scheduled chore occurrence: listing, photo check-in, peer verification, admin override and dispute handling.'],
   ['absences', 'Member absences, whole-house breaks and the chore audit log. The scheduler skips absent members.'],
   ['swaps', 'Chore swap requests: exchange two assignments, ask someone to cover (with a payback or a gift), the cover market, expiry and escalation, and permanent rotation swaps.'],

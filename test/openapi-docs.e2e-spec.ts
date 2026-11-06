@@ -17,10 +17,6 @@ import { API_TAGS, buildOpenApiDocument, setupSwagger } from './../src/swagger.s
  * `PENDING_TAGS` lists tags whose documentation is not rewritten yet; it shrinks module by module and ends empty.
  */
 const PENDING_TAGS = new Set<string>([
-  'chores',
-  'chore-settings',
-  'assignments',
-  'absences',
   'swaps',
   'chore-debts',
   'wheel',

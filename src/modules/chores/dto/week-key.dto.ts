@@ -6,7 +6,7 @@ const MESSAGE = 'Tuần không hợp lệ, định dạng đúng là 2026-W41.';
 
 /** Query của GET /assignments. Mặc định tuần hiện tại. */
 export class ListAssignmentsQuery {
-  @ApiPropertyOptional({ example: '2026-W41' })
+  @ApiPropertyOptional({ example: '2026-W41', description: 'ISO week to show, format YYYY-Www. Defaults to the current week.' })
   @IsOptional()
   @Matches(WEEK_KEY, { message: MESSAGE })
   week?: string;
@@ -14,7 +14,7 @@ export class ListAssignmentsQuery {
 
 /** Body của POST /schedules/preview. */
 export class PreviewScheduleDto {
-  @ApiProperty({ example: '2026-W41' })
+  @ApiProperty({ example: '2026-W41', description: 'ISO week to preview, format YYYY-Www. Only the current or the next week is allowed.' })
   @Matches(WEEK_KEY, { message: MESSAGE })
   weekKey: string;
 }
@@ -23,11 +23,11 @@ export const SHUFFLE_MODES = ['CREATE', 'REROLL'] as const;
 
 /** Body của POST /assignments/shuffle. */
 export class ShuffleAssignmentsDto {
-  @ApiProperty({ example: '2026-W41' })
+  @ApiProperty({ example: '2026-W41', description: 'ISO week to generate or re-roll, format YYYY-Www. Only the current or the next week is allowed.' })
   @Matches(WEEK_KEY, { message: MESSAGE })
   weekKey: string;
 
-  @ApiProperty({ enum: SHUFFLE_MODES, description: 'CREATE: tạo lịch nếu chưa có (ai cũng được). REROLL: xáo lại, chỉ trưởng phòng.' })
+  @ApiProperty({ enum: SHUFFLE_MODES, description: '`CREATE` generates the schedule if the week has none (any member; returns the existing schedule otherwise). `REROLL` regenerates an existing schedule (admin only).' })
   @IsIn(SHUFFLE_MODES, { message: 'Chế độ phải là CREATE hoặc REROLL.' })
   mode: (typeof SHUFFLE_MODES)[number];
 }
