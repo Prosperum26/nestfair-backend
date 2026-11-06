@@ -15,14 +15,14 @@ const trim = ({ value }: { value: unknown }) =>
 
 /** Mọi trường đều tùy chọn; `address` và `rules` gửi chuỗi rỗng để xóa. */
 export class UpdateHouseDto {
-  @ApiPropertyOptional({ example: 'Nhà 12A' })
+  @ApiPropertyOptional({ example: 'Sunrise House', minLength: 2, maxLength: 60, description: 'New house name (2-60 characters).' })
   @IsOptional()
   @Transform(trim)
   @IsString()
   @Length(2, 60, { message: 'Tên nhà cần từ 2 đến 60 ký tự.' })
   name?: string;
 
-  @ApiPropertyOptional({ description: 'Chuỗi rỗng để xóa địa chỉ' })
+  @ApiPropertyOptional({ maxLength: 120, description: 'New address (up to 120 characters). An empty string clears the address.' })
   @IsOptional()
   @Transform(trim)
   @IsString()
@@ -32,7 +32,7 @@ export class UpdateHouseDto {
   @ApiPropertyOptional({
     minimum: 2,
     maximum: 10,
-    description: 'Không thấp hơn số người đang ở',
+    description: 'New member capacity, 2-10. Cannot be lower than the number of active members. Raising it can reopen a listing that was closed as full.',
   })
   @IsOptional()
   @Type(() => Number)
@@ -42,7 +42,8 @@ export class UpdateHouseDto {
   maxMembers?: number;
 
   @ApiPropertyOptional({
-    description: 'Nội quy nhà, tối đa 1000 ký tự; chuỗi rỗng để xóa',
+    maxLength: 1000,
+    description: 'House rules text, up to 1000 characters; one rule per line. An empty string clears the rules.',
   })
   @IsOptional()
   @Transform(trim)

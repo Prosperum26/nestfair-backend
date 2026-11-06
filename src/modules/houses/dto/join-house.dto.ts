@@ -7,7 +7,7 @@ export class JoinHouseDto {
   @ApiProperty({
     example: 'K7M2QZ',
     description:
-      '6 ký tự, không phân biệt hoa thường, khoảng trắng được bỏ qua.',
+      'The 6-character invite code. Case-insensitive; spaces and dashes are ignored.',
   })
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? normalizeInviteCode(value) : value,
