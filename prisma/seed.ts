@@ -1,7 +1,7 @@
 /**
- * Dữ liệu demo theo Design.md mục 7: Nhà 12A, 4 người (Hùng trưởng phòng).
- * Chạy lại bao nhiêu lần cũng được (upsert). Các module sau (chores, expenses…)
- * bổ sung dữ liệu của mình vào cuối file, dùng lại `users` và `house` ở dưới.
+ * Dữ liệu demo theo Design.md mục 7: Nhà 12A, 4 người (Hùng trưởng phòng), cộng Nhà 7B để thử thao tác
+ * không hoàn tác (xóa thành viên, chuyển trưởng phòng, giải tán). Chạy lại bao nhiêu lần cũng được (upsert,
+ * dữ liệu theo module xóa rồi tạo lại). Ngày của sổ chi tính theo tháng hiện tại.
  *
  *   npm run seed
  */
@@ -115,6 +115,19 @@ async function seedChores(houseId: string, users: Record<string, { id: string }>
 
   const today = toDateStr(new Date());
   const thisWeek = currentWeekStart();
+
+  // Mai khai vắng Thứ Sáu → Chủ Nhật tuần sau (về quê). Khai trước khi sinh lịch nên tuần sau không xếp ca cho Mai
+  // vào các ngày đó, đúng thứ demo "lịch tránh người vắng".
+  await prisma.memberAbsence.create({
+    data: {
+      houseId,
+      userId: users.mai.id,
+      startDate: new Date(`${addDays(thisWeek, 11)}T00:00:00Z`),
+      endDate: new Date(`${addDays(thisWeek, 13)}T00:00:00Z`),
+      reason: 'Về quê cuối tuần',
+      createdById: users.mai.id,
+    },
+  });
   const verifierOf = (assigneeId: string) => memberIds[(memberIds.indexOf(assigneeId) + 1) % memberIds.length];
 
   for (const offset of [-3, -2, -1, 0, 1]) {
@@ -454,6 +467,18 @@ const at = (ymd: string) => new Date(`${ymd}T12:00:00+07:00`);
 /** Ngày hôm nay (giờ VN) dạng YYYY-MM-DD. */
 const vnToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
 
+/**
+ * Sổ chi bám theo tháng hiện tại để màn "tháng này" luôn ra đúng số liệu thiết kế dù seed chạy vào tháng nào
+ * (Design.md mục 7 chọn 06.10 làm "hôm nay"; ngày nào vượt hôm nay thì kéo về hôm nay, tránh khoản chi ở tương lai).
+ */
+const [YEAR, MONTH, TODAY_DAY] = vnToday().split('-').map(Number);
+const PREV_MONTH = MONTH === 1 ? 12 : MONTH - 1;
+const pad2 = (n: number) => String(n).padStart(2, '0');
+/** Ngày `day` của tháng hiện tại, không vượt quá hôm nay. */
+const inMonth = (day: number) => `${YEAR}-${pad2(MONTH)}-${pad2(Math.min(day, TODAY_DAY))}`;
+/** Ngày cuối tháng trước lùi `back` ngày (0 = ngày cuối). */
+const prevMonthEnd = (back: number) => new Date(Date.UTC(YEAR, MONTH - 1, -back)).toISOString().slice(0, 10);
+
 /** Ngày của thứ kế tiếp trong tuần (1 = Thứ Hai…7 = Chủ Nhật) theo lịch VN, luôn ở tương lai. */
 const vnNextWeekday = (isoWeekday: number) => {
   const base = new Date(`${vnToday()}T00:00:00+07:00`);
@@ -467,7 +492,7 @@ const vnNextWeekday = (isoWeekday: number) => {
 };
 
 /**
- * Sổ chi theo Design.md mục 7: tháng 10 tổng 2.280.000đ (6 hóa đơn, ảnh 07), tháng 9 đã tất toán hết
+ * Sổ chi theo Design.md mục 7: tháng này tổng 2.280.000đ (6 hóa đơn, ảnh 07), tháng trước đã tất toán hết
  * bằng 3 settlement CONFIRMED, và 1 settlement PENDING (Thiện báo đã chuyển cho Mai, ảnh 09).
  * Số dư ròng sau seed: Mai +380.000đ, Quân +170.000đ, Hùng −170.000đ, Thiện −380.000đ, nên rút gọn còn
  * Thiện → Mai 380.000đ và Hùng → Quân 170.000đ. Xóa và tạo lại sổ chi của nhà demo mỗi lần chạy.
@@ -490,35 +515,35 @@ async function seedExpenses(houseId: string, users: Record<string, { id: string 
   await prisma.expense.deleteMany({ where: { houseId } });
 
   const expenses = [
-    // Tháng 10 (khớp ảnh 07).
-    { title: 'Nước rửa chén & giấy', category: 'SUPPLIES', payer: 'mai', date: '2026-10-05', splitType: 'EQUAL', splits: equal(120_000) },
-    { title: 'Bình gas', category: 'OTHER', payer: 'hung', date: '2026-10-05', splitType: 'EQUAL', splits: equal(380_000) },
+    // Tháng hiện tại (khớp ảnh 07: tháng 10, tổng 2.280.000đ).
+    { title: 'Nước rửa chén & giấy', category: 'SUPPLIES', payer: 'mai', date: inMonth(5), splitType: 'EQUAL', splits: equal(120_000) },
+    { title: 'Bình gas', category: 'OTHER', payer: 'hung', date: inMonth(5), splitType: 'EQUAL', splits: equal(380_000) },
     {
       title: 'Đi chợ cuối tuần',
       category: 'FOOD',
       payer: 'quan',
-      date: '2026-10-04',
+      date: inMonth(4),
       splitType: 'EXACT',
       splits: exact({ hung: 110_000, thien: 120_000, mai: 140_000, quan: 150_000 }),
       receiptImageUrl: SAMPLE_PROOF_URL,
     },
-    { title: 'Wifi tháng 10', category: 'INTERNET', payer: 'quan', date: '2026-10-03', splitType: 'EQUAL', splits: equal(240_000) },
-    { title: 'Tiền nước', category: 'WATER', payer: 'thien', date: '2026-10-02', splitType: 'EQUAL', splits: equal(180_000) },
-    { title: 'Tiền điện tháng 10', category: 'ELECTRICITY', payer: 'mai', date: '2026-10-01', splitType: 'EQUAL', splits: equal(840_000) },
-    // Tháng 9: đã tất toán hết bằng 3 settlement CONFIRMED bên dưới.
+    { title: `Wifi tháng ${MONTH}`, category: 'INTERNET', payer: 'quan', date: inMonth(3), splitType: 'EQUAL', splits: equal(240_000) },
+    { title: 'Tiền nước', category: 'WATER', payer: 'thien', date: inMonth(2), splitType: 'EQUAL', splits: equal(180_000) },
+    { title: `Tiền điện tháng ${MONTH}`, category: 'ELECTRICITY', payer: 'mai', date: inMonth(1), splitType: 'EQUAL', splits: equal(840_000) },
+    // Tháng trước: đã tất toán hết bằng 3 settlement CONFIRMED bên dưới.
     {
-      title: 'Tiền điện tháng 9',
+      title: `Tiền điện tháng ${PREV_MONTH}`,
       category: 'ELECTRICITY',
       payer: 'mai',
-      date: '2026-09-27',
+      date: prevMonthEnd(3),
       splitType: 'EXACT',
       splits: exact({ hung: 100_000, thien: 95_000, mai: 190_000, quan: 15_000 }),
     },
     {
-      title: 'Wifi tháng 9',
+      title: `Wifi tháng ${PREV_MONTH}`,
       category: 'INTERNET',
       payer: 'quan',
-      date: '2026-09-26',
+      date: prevMonthEnd(4),
       splitType: 'CUSTOM',
       splits: equal(100_000, ['hung', 'quan']),
     },
@@ -559,11 +584,37 @@ async function seedExpenses(houseId: string, users: Record<string, { id: string 
     }
   }
 
+  // Bản nháp OCR chưa lưu (Design.md mục 7, ảnh 08): hóa đơn Bách Hóa Xanh 245.000đ, một dòng mờ để tô vàng.
+  // Chưa gắn khoản chi nên không đổi số dư.
+  const draftItems = [
+    { name: 'Rau củ', quantity: 1, lineTotal: 82_000 },
+    { name: 'Sữa tươi', quantity: 2, lineTotal: 76_000 },
+    { name: 'Trứng gà', quantity: 1, lineTotal: 52_000, uncertain: true, note: 'Chữ mờ, có thể là 52.000đ hoặc 57.000đ' },
+    { name: 'Nước mắm', quantity: 1, lineTotal: 35_000 },
+  ];
+  await prisma.receiptScan.create({
+    data: {
+      houseId,
+      scannedById: id('hung'),
+      imageUrl: SAMPLE_PROOF_URL,
+      status: 'DRAFT',
+      draftJson: {
+        merchant: 'Bách Hóa Xanh',
+        purchasedAt: inMonth(6),
+        items: draftItems,
+        total: draftItems.reduce((sum, i) => sum + i.lineTotal, 0),
+        warnings: ['Dòng "Trứng gà" hơi mờ, bạn kiểm tra lại giúp'],
+      },
+      model: 'seed',
+      latencyMs: 2400,
+    },
+  });
+
   const settlements = [
-    { from: 'quan', to: 'hung', amount: 60_000, status: 'CONFIRMED', date: '2026-09-28' },
-    { from: 'thien', to: 'quan', amount: 95_000, status: 'CONFIRMED', date: '2026-09-29', proofUrl: SAMPLE_PROOF_URL },
-    { from: 'hung', to: 'mai', amount: 210_000, status: 'CONFIRMED', date: '2026-09-30' },
-    { from: 'thien', to: 'mai', amount: 380_000, status: 'PENDING', date: '2026-10-06', proofUrl: SAMPLE_PROOF_URL },
+    { from: 'quan', to: 'hung', amount: 60_000, status: 'CONFIRMED', date: prevMonthEnd(2) },
+    { from: 'thien', to: 'quan', amount: 95_000, status: 'CONFIRMED', date: prevMonthEnd(1), proofUrl: SAMPLE_PROOF_URL },
+    { from: 'hung', to: 'mai', amount: 210_000, status: 'CONFIRMED', date: prevMonthEnd(0) },
+    { from: 'thien', to: 'mai', amount: 380_000, status: 'PENDING', date: inMonth(6), proofUrl: SAMPLE_PROOF_URL },
   ] as const;
 
   for (const s of settlements) {
@@ -709,6 +760,110 @@ async function seedAssistantReminders(houseId: string, users: Record<string, { i
   });
 }
 
+/**
+ * Hai đề xuất nội quy đang chờ Hùng duyệt (màn Cài đặt nhà), từ Thiện và Quân. Chỉ ADD vì nội quy mẫu viết
+ * liền một dòng nên không có điều nào tách riêng để EDIT / REMOVE. `main` đã xóa đề xuất cũ nên chạy lại được.
+ */
+async function seedRuleProposals(houseId: string, users: Record<string, { id: string }>) {
+  await prisma.ruleProposal.createMany({
+    data: [
+      {
+        houseId,
+        proposerId: users.thien.id,
+        kind: 'ADD',
+        content: 'Giữ yên lặng sau 23:00 vào các ngày trong tuần.',
+        reason: 'Tuần này mình thi, cần ngủ sớm.',
+        createdAt: new Date(Date.now() - 26 * 3_600_000),
+      },
+      {
+        houseId,
+        proposerId: users.quan.id,
+        kind: 'ADD',
+        content: 'Đồ ăn chung trong tủ lạnh dán nhãn tên người mua.',
+        reason: 'Đỡ nhầm đồ của nhau.',
+        createdAt: new Date(Date.now() - 5 * 3_600_000),
+      },
+    ],
+  });
+}
+
+const SIDE_HOUSE = {
+  name: 'Nhà 7B',
+  inviteCode: 'P4T9XR',
+  address: 'Hẻm 12, Dĩ An, Bình Dương',
+  // [khóa người dùng, vai trò]
+  members: [['hung', 'ADMIN'], ['thien', 'ROOMMATE'], ['mai', 'ROOMMATE']] as const,
+} as const;
+
+/**
+ * Nhà phụ để thử các thao tác không hoàn tác mà không phá Nhà 12A: mời / xóa thành viên, chuyển trưởng phòng,
+ * rời nhà, giải tán. 3 người (Hùng trưởng phòng), 2 việc, 1 khoản điện 90.000đ Mai ứng trước chia đều
+ * (Mai +60.000đ, Hùng −30.000đ, Thiện −30.000đ) để thử cả "còn nợ nên chặn" lẫn "hết nợ thì cho đi".
+ * Kịch bản gợi ý: giải tán khi còn nợ (bị chặn) → xóa Thiện (nợ được ghi điều chỉnh) → chuyển trưởng phòng
+ * cho Mai → Mai rời → người cuối giải tán. Mỗi lần seed là đặt lại nguyên trạng, kể cả sau khi đã giải tán.
+ */
+async function seedSideHouse(users: Record<string, { id: string }>) {
+  const data = {
+    name: SIDE_HOUSE.name,
+    address: SIDE_HOUSE.address,
+    maxMembers: 4,
+    inviteExpiresAt: new Date(Date.now() + 7 * 86_400_000),
+    rules: 'Đổ rác trước 21:00. Khách ở qua đêm báo trước trong nhóm.',
+    dissolvedAt: null,
+  };
+  const house = await prisma.house.upsert({
+    where: { inviteCode: SIDE_HOUSE.inviteCode },
+    update: data,
+    create: { ...data, inviteCode: SIDE_HOUSE.inviteCode },
+  });
+  const houseId = house.id;
+
+  // Xóa theo thứ tự phụ thuộc: ca và nợ ca trước, rồi mới tới thành viên mà chúng trỏ vào.
+  await cleanSwaps(houseId);
+  await prisma.settlement.deleteMany({ where: { houseId } });
+  await prisma.balanceAdjustment.deleteMany({ where: { houseId } });
+  await prisma.receiptScan.deleteMany({ where: { houseId } });
+  await prisma.expense.deleteMany({ where: { houseId } });
+  await prisma.choreAuditLog.deleteMany({ where: { houseId } });
+  await prisma.memberAbsence.deleteMany({ where: { houseId } });
+  await prisma.houseBreak.deleteMany({ where: { houseId } });
+  await prisma.choreAssignment.deleteMany({ where: { houseId } });
+  await prisma.weekSchedule.deleteMany({ where: { houseId } });
+  await prisma.chore.deleteMany({ where: { houseId } });
+  await prisma.houseActivity.deleteMany({ where: { houseId } });
+  await prisma.ruleProposal.deleteMany({ where: { houseId } });
+  await prisma.reminder.deleteMany({ where: { houseId } });
+  await prisma.assistantMessage.deleteMany({ where: { houseId } });
+  await prisma.houseMember.deleteMany({ where: { houseId } });
+
+  for (const [key, role] of SIDE_HOUSE.members) {
+    await prisma.houseMember.create({ data: { houseId, userId: users[key].id, role } });
+  }
+
+  await prisma.chore.createMany({
+    data: [CHORES[1], CHORES[4]].map((c) => ({ houseId, ...c, recurrenceDays: [...c.recurrenceDays] })),
+  });
+  const weekStart = currentWeekStart();
+  const seed = 7000;
+  const ctx = await buildGenContext(prisma, houseId, weekStart, seed);
+  await createScheduleRows(prisma, houseId, weekStart, 'CRON', seed, ctx, generateWeek(ctx.input), 'PUBLISHED');
+
+  const share = 90_000 / SIDE_HOUSE.members.length;
+  await prisma.expense.create({
+    data: {
+      houseId,
+      payerId: users.mai.id,
+      createdById: users.mai.id,
+      title: `Tiền điện tháng ${MONTH}`,
+      category: 'ELECTRICITY',
+      totalAmount: 90_000,
+      splitType: 'EQUAL',
+      spentAt: at(inMonth(3)),
+      splits: { create: SIDE_HOUSE.members.map(([key]) => ({ userId: users[key].id, allocatedAmount: share })) },
+    },
+  });
+}
+
 async function main() {
   const started = Date.now();
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
@@ -761,6 +916,7 @@ async function main() {
     }
   }
 
+  await seedRuleProposals(house.id, users);
   await cleanSwaps(house.id);
   await seedChores(house.id, users);
   const activities = await seedRealtime(house.id, users);
@@ -768,9 +924,10 @@ async function main() {
   await seedExpenses(house.id, users);
   await seedAssistantReminders(house.id, users);
   await seedListing(prisma, { houseId: house.id, contactPhone: MEMBERS[0].phone });
+  await seedSideHouse(users);
 
   console.log(
-    `Seed xong trong ${Date.now() - started}ms: ${house.name} (mã ${INVITE_CODE}), ` +
+    `Seed xong trong ${Date.now() - started}ms: ${house.name} (mã ${INVITE_CODE}) và ${SIDE_HOUSE.name} (mã ${SIDE_HOUSE.inviteCode}), ` +
       `${MEMBERS.length} tài khoản *@nestfair.demo / ${PASSWORD}, 1 vòng quay, ${activities} mục ticker, dữ liệu đổi ca`,
   );
 }
