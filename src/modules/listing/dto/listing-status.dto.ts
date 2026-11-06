@@ -6,7 +6,7 @@ export class ListingStatusDto {
   @ApiProperty({
     enum: ListingStatus,
     enumName: 'ListingStatus',
-    description: 'OPEN = đăng / mở lại, DRAFT = tạm ẩn, CLOSED = đóng tin',
+    description: 'Target status. `OPEN` publishes (or reopens) the listing; `DRAFT` hides an open listing again; `CLOSED` closes it. A closed listing cannot return to DRAFT.',
   })
   @IsEnum(ListingStatus, { message: 'Trạng thái tin không hợp lệ.' })
   status: ListingStatus;

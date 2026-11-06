@@ -1,15 +1,14 @@
 import { Controller, Get, Header, Param, UseGuards } from '@nestjs/common';
 import {
   ApiExtraModels,
-  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
-  ApiTooManyRequestsResponse,
   getSchemaPath,
 } from '@nestjs/swagger';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { ApiErrors } from '../../common/swagger/api-errors.decorator.js';
 import { PublicListingClosedDto, type PublicListingDto, PublicListingOpenDto } from './dto/public-listing.dto.js';
 import { PublicListingService } from './public-listing.service.js';
 
@@ -24,17 +23,22 @@ export class PublicListingController {
 
   @Get(':slug')
   @Header('Cache-Control', 'no-store')
-  @ApiParam({ name: 'slug', example: 'x7Kp2QmA', description: '8 ký tự 0-9A-Za-z' })
+  @ApiParam({ name: 'slug', example: 'x7Kp2QmA', description: 'Public identifier of the listing: exactly 8 characters from 0-9, A-Z, a-z.' })
   @ApiOperation({
-    summary: 'Trang công khai của tin tìm người ở ghép. Không trả email, STK, họ tên hay tên nhà.',
+    summary: 'View a public roommate listing',
     description:
-      'Tin đang mở: đầy đủ nội dung và liên hệ. Tin đã đóng hoặc nhà đã đủ người: bản rút gọn (không có liên hệ, lịch trực, ảnh).',
+      'No authentication. Returns the public page data of a listing by its slug, for the shareable link `/r/{slug}` and for the poster QR code. ' +
+      'An open listing returns the full content: location, rent, fees, utilities estimate, free places, photos, the contact phone and, if the admin allows it, this week\'s ' +
+      'chore roster with anonymous labels ("TV1", "TV2"). A closed listing (the house is full, or the admin closed it) returns a short variant with only the slug, ' +
+      'the close reason, the location and a cover photo, so visitors see a friendly "no longer available" page. ' +
+      'The response never contains email addresses, bank accounts, member names, user or house ids or the invite code. The call only reads data and is not cached. ' +
+      'An unknown or malformed slug and a hidden (draft) listing all return the same 404, so existence cannot be probed. Limited to 60 requests per minute per client.',
   })
   @ApiOkResponse({
+    description: 'An open listing (`status` OPEN) or the short closed variant (`status` CLOSED).',
     schema: { oneOf: [{ $ref: getSchemaPath(PublicListingOpenDto) }, { $ref: getSchemaPath(PublicListingClosedDto) }] },
   })
-  @ApiNotFoundResponse({ description: 'LISTING_NOT_FOUND: slug sai hoặc tin đang tạm ẩn' })
-  @ApiTooManyRequestsResponse({ description: 'Quá 60 lần/phút' })
+  @ApiErrors([404, 'Code `LISTING_NOT_FOUND`: the slug is wrong or malformed, or the listing is a hidden draft.'], [429, 'More than 60 requests per minute.'])
   get(@Param('slug') slug: string): Promise<PublicListingDto> {
     return this.publicListing.get(slug);
   }

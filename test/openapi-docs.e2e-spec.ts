@@ -21,8 +21,6 @@ const PENDING_TAGS = new Set<string>([
   'activity',
   'assistant',
   'reminders',
-  'listings',
-  'public-listings',
 ]);
 
 const VIETNAMESE = /[À-ỹ]/;

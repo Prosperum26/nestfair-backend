@@ -14,23 +14,17 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
-  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiBody,
-  ApiConflictResponse,
   ApiConsumes,
   ApiCreatedResponse,
-  ApiForbiddenResponse,
-  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
-  ApiServiceUnavailableResponse,
   ApiTags,
-  ApiUnauthorizedResponse,
-  ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { ApiErrors } from '../../common/swagger/api-errors.decorator.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import type { AuthUser } from '../auth/strategies/jwt.strategy.js';
@@ -51,10 +45,8 @@ const HARD_LIMIT_BYTES = 10 * 1024 * 1024;
 
 @ApiTags('listings')
 @ApiBearerAuth()
-@ApiUnauthorizedResponse()
-@ApiForbiddenResponse({ description: 'Không phải thành viên nhà này (hoặc không phải trưởng phòng khi ghi)' })
-@ApiNotFoundResponse({ description: 'houseId không hợp lệ' })
-@ApiParam({ name: 'houseId', format: 'uuid' })
+@ApiErrors(401, [403, 'The caller is not an active member of this house, or (for write operations) not the admin.'])
+@ApiParam({ name: 'houseId', format: 'uuid', description: 'Id of the house.' })
 @UseGuards(JwtAuthGuard, HouseMemberGuard)
 @Controller('houses/:houseId/listing')
 export class ListingController {
@@ -65,8 +57,14 @@ export class ListingController {
   ) {}
 
   @Get()
-  @ApiOperation({ summary: 'Tin tìm người ở ghép của nhà (hoặc null) kèm số chỗ, điện nước ước tính và gợi ý điền sẵn' })
-  @ApiOkResponse({ type: ListingPayloadDto })
+  @ApiOperation({
+    summary: 'Get the house\'s roommate listing',
+    description:
+      'Returns the house\'s single roommate-finding listing (or `listing: null` when none exists yet) together with everything the editing screen needs: ' +
+      'the public URL, the number of free places, an electricity-and-water estimate averaged over the last 3 closed months, the estimated monthly cost per person, ' +
+      'the photo groups still missing, and values to prefill the form (house address, the caller\'s phone). Any active member can read it. Read-only.',
+  })
+  @ApiOkResponse({ type: ListingPayloadDto, description: 'The listing payload.' })
   get(@CurrentMembership() m: HouseMembership, @CurrentUser() user: AuthUser): Promise<ListingPayloadDto> {
     return this.listing.getForHouse(m.houseId, user.id);
   }
@@ -75,10 +73,14 @@ export class ListingController {
   @HouseRoles('ADMIN')
   @UseGuards(HouseRolesGuard)
   @ApiOperation({
-    summary: 'Trưởng phòng tạo (DRAFT) hoặc cập nhật nội dung tin. Không đổi trạng thái hay slug.',
+    summary: 'Create or update the listing content (admin)',
+    description:
+      'Saves the text content of the listing: location, gender wanted, rent, other fees, description, expectations, contact phone and whether the roster is shown. ' +
+      'The first call creates the listing as a `DRAFT` and generates its permanent 8-character slug; later calls edit it in place. ' +
+      'It never changes the status or the slug: sending `status` or `slug` is rejected with 400, and publishing goes through the status endpoint. Admin only.',
   })
-  @ApiOkResponse({ type: ListingPayloadDto })
-  @ApiBadRequestResponse({ description: 'Dữ liệu không hợp lệ (kể cả field lạ như status, slug)' })
+  @ApiOkResponse({ type: ListingPayloadDto, description: 'The saved listing payload.' })
+  @ApiErrors([400, 'Invalid body, including unknown fields such as `status` or `slug`.'])
   upsert(
     @CurrentMembership() m: HouseMembership,
     @CurrentUser() user: AuthUser,
@@ -91,15 +93,21 @@ export class ListingController {
   @HouseRoles('ADMIN')
   @UseGuards(HouseRolesGuard)
   @ApiOperation({
-    summary: 'Trưởng phòng đăng (OPEN), tạm ẩn (DRAFT), đóng (CLOSED) hoặc mở lại tin. Đóng tay phát `listing:closed`.',
+    summary: 'Publish, hide, close or reopen the listing (admin)',
+    description:
+      'Moves the listing between `DRAFT` (hidden), `OPEN` (public) and `CLOSED`. Publishing or reopening (`OPEN`) needs at least one free place in the house ' +
+      '(else 409 `HOUSE_FULL`) and at least one photo in each of the three groups (else 422 `LISTING_INCOMPLETE` with the list of missing groups). ' +
+      'A closed listing cannot go back to `DRAFT`. Closing by hand records the reason `MANUAL` and broadcasts `listing:closed`. ' +
+      'Independently of this endpoint the server closes an open listing automatically with reason `FULL` when the house fills up, and reopens it with `listing:reopened` ' +
+      'when a place frees up again (only for listings closed as `FULL`, never for those the admin closed by hand). Setting the current status again changes nothing. Admin only.',
   })
-  @ApiOkResponse({ type: ListingPayloadDto })
-  @ApiBadRequestResponse({ description: 'status không hợp lệ' })
-  @ApiNotFoundResponse({ description: 'LISTING_NOT_FOUND: nhà chưa có tin' })
-  @ApiConflictResponse({ description: 'HOUSE_FULL: đăng hoặc mở lại khi nhà đã đủ người' })
-  @ApiUnprocessableEntityResponse({
-    description: 'LISTING_INCOMPLETE (kèm missing) | LISTING_STATUS_INVALID (CLOSED → DRAFT)',
-  })
+  @ApiOkResponse({ type: ListingPayloadDto, description: 'The listing payload after the change.' })
+  @ApiErrors(
+    [400, '`status` is not DRAFT, OPEN or CLOSED.'],
+    [404, 'Code `LISTING_NOT_FOUND`: the house has no listing yet; save the content first.'],
+    [409, 'Code `HOUSE_FULL`: there is no free place, so the listing cannot be opened.'],
+    [422, 'Codes `LISTING_INCOMPLETE` (response includes `missing`, the photo groups that have none) or `LISTING_STATUS_INVALID` (a closed listing cannot become a draft).'],
+  )
   setStatus(
     @CurrentMembership() m: HouseMembership,
     @Body() dto: ListingStatusDto,
@@ -117,17 +125,26 @@ export class ListingController {
       type: 'object',
       required: ['photo', 'category'],
       properties: {
-        photo: { type: 'string', format: 'binary', description: 'JPG/PNG/WEBP, tối đa 5MB' },
-        category: { type: 'string', enum: ['BEDROOM', 'BATHROOM', 'LIVING'] },
+        photo: { type: 'string', format: 'binary', description: 'Photo: JPEG, PNG or WebP, up to 5 MB.' },
+        category: { type: 'string', enum: ['BEDROOM', 'BATHROOM', 'LIVING'], description: 'Photo group the image belongs to.' },
       },
     },
   })
-  @ApiOperation({ summary: 'Trưởng phòng tải ảnh lên một nhóm (tối đa 6 ảnh mỗi nhóm)' })
-  @ApiCreatedResponse({ type: ListingPhotoDto })
-  @ApiBadRequestResponse({ description: 'Thiếu file hoặc nhóm ảnh không hợp lệ' })
-  @ApiNotFoundResponse({ description: 'LISTING_NOT_FOUND: nhà chưa có tin' })
-  @ApiUnprocessableEntityResponse({ description: 'PHOTO_LIMIT: nhóm đã đủ 6 ảnh' })
-  @ApiServiceUnavailableResponse({ description: 'UPLOAD_UNAVAILABLE: chưa cấu hình / lỗi Cloudinary' })
+  @ApiOperation({
+    summary: 'Upload a listing photo (admin)',
+    description:
+      'Adds one photo (multipart fields `photo` and `category`) to a group of the listing. Each group (BEDROOM, BATHROOM, LIVING) holds at most 6 photos, and the listing ' +
+      'must already exist. The image is validated (JPEG, PNG or WebP, up to 5 MB) and stored; the new photo goes to the end of its group. Admin only.',
+  })
+  @ApiCreatedResponse({ type: ListingPhotoDto, description: 'The stored photo.' })
+  @ApiErrors(
+    [400, 'Codes `PHOTO_FILE_REQUIRED` (no file) or an invalid `category`.'],
+    [404, 'Code `LISTING_NOT_FOUND`: the house has no listing yet.'],
+    [413, 'Code `IMAGE_TOO_LARGE`: the image is larger than 5 MB.'],
+    [415, 'Code `UNSUPPORTED_IMAGE`: the file is not a JPEG, PNG or WebP image.'],
+    [422, 'Code `PHOTO_LIMIT`: the group already has 6 photos.'],
+    [503, 'Code `UPLOAD_UNAVAILABLE`: image storage is not configured or failed.'],
+  )
   addPhoto(
     @CurrentMembership() m: HouseMembership,
     @Body() dto: UploadPhotoDto,
@@ -139,11 +156,16 @@ export class ListingController {
   @Delete('photos/:photoId')
   @HouseRoles('ADMIN')
   @UseGuards(HouseRolesGuard)
-  @ApiParam({ name: 'photoId', format: 'uuid' })
-  @ApiOperation({ summary: 'Trưởng phòng xóa ảnh (tin đang đăng không được mất ảnh cuối của nhóm)' })
-  @ApiOkResponse({ schema: { type: 'object', properties: { ok: { type: 'boolean', example: true } } } })
-  @ApiNotFoundResponse({ description: 'Không có ảnh này trong tin của nhà' })
-  @ApiUnprocessableEntityResponse({ description: 'PHOTO_REQUIRED: xóa ảnh cuối của nhóm khi tin đang OPEN' })
+  @ApiParam({ name: 'photoId', format: 'uuid', description: 'Id of the photo to delete.' })
+  @ApiOperation({
+    summary: 'Delete a listing photo (admin)',
+    description: 'Removes a photo from the listing. While the listing is `OPEN` the last photo of a group cannot be removed, because a published listing needs at least one photo in each group; hide the listing first. Admin only.',
+  })
+  @ApiOkResponse({ description: 'The photo was deleted.', schema: { type: 'object', properties: { ok: { type: 'boolean', example: true } } } })
+  @ApiErrors(
+    [404, 'The photo does not exist in this house\'s listing.'],
+    [422, 'Code `PHOTO_REQUIRED`: it is the last photo of its group and the listing is open.'],
+  )
   removePhoto(
     @CurrentMembership() m: HouseMembership,
     @Param('photoId', ParseUUIDPipe) photoId: string,
@@ -154,11 +176,16 @@ export class ListingController {
   @Patch('photos/:photoId/cover')
   @HouseRoles('ADMIN')
   @UseGuards(HouseRolesGuard)
-  @ApiParam({ name: 'photoId', format: 'uuid' })
-  @ApiOperation({ summary: 'Trưởng phòng chọn ảnh bìa: đưa ảnh Phòng ngủ lên đầu nhóm' })
-  @ApiOkResponse({ type: ListingPhotoDto })
-  @ApiNotFoundResponse({ description: 'Không có ảnh này trong tin của nhà' })
-  @ApiUnprocessableEntityResponse({ description: 'COVER_CATEGORY_INVALID: chỉ ảnh Phòng ngủ làm được ảnh bìa' })
+  @ApiParam({ name: 'photoId', format: 'uuid', description: 'Id of the bedroom photo to use as the cover.' })
+  @ApiOperation({
+    summary: 'Choose the cover photo (admin)',
+    description: 'Moves a bedroom photo to the front of the BEDROOM group, making it the cover shown on the listing card and the poster. Only bedroom photos can be the cover. Admin only.',
+  })
+  @ApiOkResponse({ type: ListingPhotoDto, description: 'The photo, now first in its group.' })
+  @ApiErrors(
+    [404, 'The photo does not exist in this house\'s listing.'],
+    [422, 'Code `COVER_CATEGORY_INVALID`: only a bedroom photo can be the cover.'],
+  )
   setCover(
     @CurrentMembership() m: HouseMembership,
     @Param('photoId', ParseUUIDPipe) photoId: string,
