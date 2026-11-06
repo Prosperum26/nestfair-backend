@@ -58,3 +58,15 @@ export function nextStatus(input: {
       return { change: true, status: 'CLOSED', closeReason: 'MANUAL', setPublishedAt: false, setClosedAt: true };
   }
 }
+
+/**
+ * Tin chỉ tự mở lại khi nó đóng vì đủ người (`FULL`) và nhà nay lại còn chỗ.
+ * Tin do trưởng phòng đóng tay (`MANUAL`) giữ nguyên: đó là quyết định của họ.
+ */
+export function shouldReopenAfterFull(input: {
+  status: ListingStatus;
+  closeReason: ListingCloseReason | null;
+  slotsOpen: number;
+}): boolean {
+  return input.status === 'CLOSED' && input.closeReason === 'FULL' && input.slotsOpen > 0;
+}
