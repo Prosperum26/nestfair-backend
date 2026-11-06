@@ -6,18 +6,18 @@ export const DEFAULT_MESSAGE_PAGE = 30;
 export const MAX_MESSAGE_PAGE = 50;
 
 export class ListMessagesQuery {
-  @ApiPropertyOptional({ format: 'uuid', description: 'Thread cần đọc; bỏ trống thì lấy thread mới nhất của bạn trong nhà này' })
+  @ApiPropertyOptional({ format: 'uuid', description: 'Chat thread to read. Omit it to read the caller\'s most recent thread in this house.' })
   @IsOptional()
   @IsUUID('all', { message: 'threadId không hợp lệ.' })
   threadId?: string;
 
-  @ApiPropertyOptional({ description: 'Con trỏ phân trang lấy từ `nextCursor` của lần gọi trước' })
+  @ApiPropertyOptional({ maxLength: 200, description: 'Pagination cursor taken from `nextCursor` of the previous response.' })
   @IsOptional()
   @IsString()
   @MaxLength(200, { message: 'cursor không hợp lệ.' })
   cursor?: string;
 
-  @ApiPropertyOptional({ minimum: 1, maximum: MAX_MESSAGE_PAGE, default: DEFAULT_MESSAGE_PAGE, description: 'Số tin mỗi trang (1–50)' })
+  @ApiPropertyOptional({ minimum: 1, maximum: MAX_MESSAGE_PAGE, default: DEFAULT_MESSAGE_PAGE, description: 'Messages per page (1-50).' })
   @IsOptional()
   @Type(() => Number)
   @IsInt({ message: 'limit phải là số nguyên.' })

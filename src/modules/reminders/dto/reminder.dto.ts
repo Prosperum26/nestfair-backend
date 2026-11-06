@@ -3,25 +3,25 @@ import { ReminderSource } from '../../../generated/prisma/enums.js';
 
 /** Nhắc nhở cá nhân. `remindAt` / `sentAt` là ISO 8601 (UTC). */
 export class ReminderDto {
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ format: 'uuid', description: 'Reminder id.' })
   id: string;
 
-  @ApiProperty({ format: 'uuid', description: 'Nhà mà nhắc gắn với (nhà đang ở khi tạo)' })
+  @ApiProperty({ format: 'uuid', description: 'House the reminder is attached to (the one given when it was created).' })
   houseId: string;
 
-  @ApiProperty({ example: 'Đóng tiền điện' })
+  @ApiProperty({ example: 'Pay the electricity bill', description: 'Text of the reminder.' })
   title: string;
 
   @ApiProperty({
     example: '2026-11-01T12:00:00.000Z',
-    description: 'Thời điểm nhắc (ISO 8601)',
+    description: 'When the reminder fires (ISO 8601 UTC).',
   })
   remindAt: string;
 
   @ApiProperty({
     enum: ReminderSource,
     enumName: 'ReminderSource',
-    description: 'USER = tự tạo, ASSISTANT = từ nút gợi ý của Trợ lý, SYSTEM = hệ thống',
+    description: 'Origin: `USER` = created by the user, `ASSISTANT` = created from an assistant suggestion button, `SYSTEM` = created by the system.',
   })
   source: ReminderSource;
 
@@ -29,7 +29,7 @@ export class ReminderDto {
     type: String,
     nullable: true,
     example: null,
-    description: 'Thời điểm đã gửi thông báo; null = chưa gửi',
+    description: 'When the notification was delivered (ISO 8601 UTC); null = not sent yet.',
   })
   sentAt: string | null;
 }

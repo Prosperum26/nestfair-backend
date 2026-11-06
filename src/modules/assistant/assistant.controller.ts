@@ -3,14 +3,12 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
-  ApiForbiddenResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
-  ApiTooManyRequestsResponse,
-  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { ApiErrors } from '../../common/swagger/api-errors.decorator.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentMembership } from '../houses/decorators/current-membership.decorator.js';
 import { type HouseMembership, HouseMemberGuard } from '../houses/guards/house-member.guard.js';
@@ -25,8 +23,8 @@ import { AssistantService } from './assistant.service.js';
  */
 @ApiTags('assistant')
 @ApiBearerAuth()
-@ApiUnauthorizedResponse()
-@ApiParam({ name: 'houseId', format: 'uuid' })
+@ApiErrors(401, [403, 'The caller is not an active member of this house.'])
+@ApiParam({ name: 'houseId', format: 'uuid', description: 'Id of the house.' })
 @UseGuards(JwtAuthGuard, HouseMemberGuard)
 @Controller('houses/:houseId/assistant/messages')
 export class AssistantController {
@@ -34,29 +32,36 @@ export class AssistantController {
 
   @Get()
   @ApiOperation({
-    summary: 'Đọc lịch sử chat với Trợ lý của CHÍNH MÌNH',
+    summary: 'Read my chat history with the assistant',
     description:
-      'Chỉ trả tin nhắn của người gọi trong nhà này. `threadId` bỏ trống → thread mới nhất. ' +
-      'Trang gồm `items` từ cũ đến mới, `nextCursor` truyền lại để lấy trang kế tiếp (phân trang theo createdAt + id). ' +
-      'Không có API xóa lịch sử.',
+      'Returns only the caller\'s own messages in this house; no endpoint ever returns another member\'s conversation. Without `threadId` the most recent thread is used. ' +
+      'A page lists `items` oldest to newest, and `nextCursor` (pagination by creation time and id) is passed back as `cursor` to fetch the next page. ' +
+      'There is no endpoint to delete history. Read-only.',
   })
-  @ApiOkResponse({ type: AssistantMessagesPageDto })
+  @ApiOkResponse({ type: AssistantMessagesPageDto, description: 'A page of the caller\'s messages.' })
+  @ApiErrors([400, '`threadId`, `cursor` or `limit` is invalid.'])
   list(@CurrentMembership() m: HouseMembership, @Query() query: ListMessagesQuery): Promise<AssistantMessagesPageDto> {
     return this.assistant.list(m, query);
   }
 
   @Post()
   @ApiOperation({
-    summary: 'Gửi tin cho Trợ lý AI và nhận câu trả lời',
+    summary: 'Send a message to the AI assistant',
     description:
-      'Cần đã đồng ý gửi tin nhắn tới Google Gemini (assistantConsentAt). Hạn mức 30 tin/người/ngày (giờ VN, mọi nhà, ' +
-      'tính cả lượt AI lỗi) — vượt thì 429 kèm resetAt. Gemini lỗi / quá 10 giây / trả lời rỗng thì vẫn 201 với tin dự phòng. ' +
-      'Hành động trong `assistantMessage.actions` CHỈ LÀ NÚT GỢI Ý: Trợ lý không bao giờ tự tạo nhắc nhở, giao việc hay ghi khoản chi.',
+      'Sends a message to the private AI housemate assistant (Gemini) and returns its answer in the same response. The user must first consent to sending chat messages ' +
+      'to Google Gemini (`PATCH /users/me/assistant-consent`). Each user may send 30 messages per day across all houses (Vietnam time), counting attempts where the AI failed; ' +
+      'beyond that the call fails with 429 and a `resetAt` timestamp (next midnight, Vietnam time). If Gemini fails, takes longer than 10 seconds or answers with nothing, the call ' +
+      'still succeeds with 201 and a fallback message. The AI answers in a structured JSON format: a category, the reply text and optionally suggested actions. ' +
+      'The actions in `assistantMessage.actions` are only suggested BUTTONS: the assistant never creates reminders, assigns chores or records expenses by itself; ' +
+      'only when the user presses a button does the client call the normal API (for example `POST /reminders`).',
   })
   @ApiBody({ type: SendMessageDto })
-  @ApiCreatedResponse({ type: SendMessageResultDto })
-  @ApiForbiddenResponse({ description: 'ASSISTANT_CONSENT_REQUIRED (chưa đồng ý dùng Trợ lý) hoặc không phải thành viên nhà này' })
-  @ApiTooManyRequestsResponse({ description: 'ASSISTANT_QUOTA_EXCEEDED: đã gửi đủ 30 tin hôm nay; body kèm resetAt (00:00 giờ VN hôm sau)' })
+  @ApiCreatedResponse({ type: SendMessageResultDto, description: 'The stored user message, the assistant\'s answer and the remaining daily quota.' })
+  @ApiErrors(
+    [400, 'The message is empty, longer than 1000 characters, or `threadId` is invalid.'],
+    [403, 'Code `ASSISTANT_CONSENT_REQUIRED` (the user has not consented to Gemini) or the caller is not a member of this house.'],
+    [429, 'Code `ASSISTANT_QUOTA_EXCEEDED`: the 30 messages of today are used up; the body includes `resetAt`.'],
+  )
   send(@CurrentMembership() m: HouseMembership, @Body() body: SendMessageDto): Promise<SendMessageResultDto> {
     return this.assistant.send(m, body);
   }
