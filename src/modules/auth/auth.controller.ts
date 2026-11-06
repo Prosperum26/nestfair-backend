@@ -12,9 +12,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
-  ApiBadRequestResponse,
   ApiBearerAuth,
-  ApiConflictResponse,
   ApiCookieAuth,
   ApiCreatedResponse,
   ApiFoundResponse,
@@ -23,7 +21,6 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiTags,
-  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import type { CookieOptions, Request, Response } from 'express';
 import type { Env } from '../../config/env.validation.js';
@@ -39,6 +36,7 @@ import {
   AuthResponseDto,
   PublicUserDto,
 } from './dto/auth-response.dto.js';
+import { ApiErrors } from '../../common/swagger/api-errors.decorator.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
@@ -64,10 +62,17 @@ export class AuthController {
   ) {}
 
   @Post('register')
-  @ApiOperation({ summary: 'Đăng ký bằng email + mật khẩu' })
-  @ApiCreatedResponse({ type: AuthResponseDto })
-  @ApiBadRequestResponse({ description: 'Dữ liệu không hợp lệ' })
-  @ApiConflictResponse({ description: 'Email đã được dùng' })
+  @ApiOperation({
+    summary: 'Register with email and password',
+    description:
+      'Creates a new account and signs the user in immediately. The password is stored as a bcrypt hash. ' +
+      'The response contains a 15-minute access token and the public user profile; a 7-day refresh token is set as the ' +
+      'httpOnly cookie `nf_rt` (path `/api/v1/auth`). The email is trimmed and lower-cased, the phone number must be a ' +
+      'Vietnamese 10-digit number starting with 0, and the password needs 8-72 characters with at least one upper-case ' +
+      'letter and one digit. No authentication required.',
+  })
+  @ApiCreatedResponse({ type: AuthResponseDto, description: 'Account created and signed in.' })
+  @ApiErrors(400, [409, 'The email address is already registered. The body has no `code`; the message asks whether the user wants to sign in instead.'])
   async register(
     @Body() dto: RegisterDto,
     @Res({ passthrough: true }) res: Response,
@@ -77,10 +82,17 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Đăng nhập bằng email + mật khẩu' })
-  @ApiOkResponse({ type: AuthResponseDto })
-  @ApiBadRequestResponse({ description: 'Dữ liệu không hợp lệ' })
-  @ApiUnauthorizedResponse({ description: 'Email hoặc mật khẩu không đúng' })
+  @ApiOperation({
+    summary: 'Sign in with email and password',
+    description:
+      'Verifies the credentials and starts a session. Returns a 15-minute access token and the user profile, and sets the ' +
+      'rotating refresh cookie `nf_rt`. With `rememberMe: false` the cookie is a browser-session cookie that disappears ' +
+      'when the browser closes; otherwise it lives for 7 days. The same generic 401 is returned for an unknown email and ' +
+      'a wrong password, and for accounts that only use Google sign-in, so the response never reveals which accounts exist. ' +
+      'No authentication required.',
+  })
+  @ApiOkResponse({ type: AuthResponseDto, description: 'Signed in.' })
+  @ApiErrors(400, [401, 'Wrong email or password.'])
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,
@@ -92,10 +104,15 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiCookieAuth()
   @ApiOperation({
-    summary: 'Cấp access token mới từ cookie refresh token (xoay vòng)',
+    summary: 'Refresh the access token',
+    description:
+      'Exchanges the refresh cookie `nf_rt` for a new access token and a new refresh cookie. Refresh tokens are single-use: ' +
+      'the presented token is revoked atomically and replaced, so a replayed or concurrent refresh with the same cookie ' +
+      'fails. On any failure the cookie is cleared and the client must sign in again. The access token is not required here; ' +
+      'only the cookie is.',
   })
-  @ApiOkResponse({ type: AuthResponseDto })
-  @ApiUnauthorizedResponse({ description: 'Không có / hết hạn / đã thu hồi' })
+  @ApiOkResponse({ type: AuthResponseDto, description: 'New access token and rotated refresh cookie.' })
+  @ApiErrors([401, 'The refresh cookie is missing, expired, already used or revoked.'])
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
@@ -111,8 +128,14 @@ export class AuthController {
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiCookieAuth()
-  @ApiOperation({ summary: 'Thu hồi refresh token hiện tại và xóa cookie' })
-  @ApiNoContentResponse()
+  @ApiOperation({
+    summary: 'Sign out',
+    description:
+      'Revokes the refresh token in the cookie and clears the cookie. Any open realtime socket of the user is disconnected ' +
+      'so it does not keep rooms of the old session. Always answers 204, even when the cookie is missing or already revoked ' +
+      '(idempotent). The short-lived access token cannot be revoked and simply expires.',
+  })
+  @ApiNoContentResponse({ description: 'Signed out.' })
   async logout(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
@@ -129,13 +152,17 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiCookieAuth(REFRESH_COOKIE)
   @ApiOperation({
-    summary: 'Đổi mật khẩu; thu hồi các phiên đăng nhập khác, giữ phiên hiện tại',
+    summary: 'Change password',
+    description:
+      'Changes the password of the signed-in user. Every other session (refresh token) of the user is revoked; the session ' +
+      'identified by the current refresh cookie stays valid. Requires the current password. Accounts created through ' +
+      'Google have no password and cannot use this route.',
   })
-  @ApiNoContentResponse()
-  @ApiBadRequestResponse({
-    description: 'WRONG_PASSWORD, SAME_PASSWORD, PASSWORD_NOT_SET (tài khoản Google) hoặc mật khẩu mới không đủ mạnh',
-  })
-  @ApiUnauthorizedResponse()
+  @ApiNoContentResponse({ description: 'Password changed; other sessions revoked.' })
+  @ApiErrors(
+    [400, 'Error codes: `WRONG_PASSWORD` (current password incorrect), `SAME_PASSWORD` (new equals current), `PASSWORD_NOT_SET` (Google-only account). A plain validation error means the new password is too weak.'],
+    401,
+  )
   async changePassword(
     @CurrentUser() user: AuthUser,
     @Body() dto: ChangePasswordDto,
@@ -147,18 +174,26 @@ export class AuthController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'User đang đăng nhập' })
-  @ApiOkResponse({ type: PublicUserDto })
-  @ApiUnauthorizedResponse()
+  @ApiOperation({
+    summary: 'Get the signed-in user',
+    description:
+      'Returns the public profile of the user identified by the access token: contact details, the bank account used for QR ' +
+      'payments, consent timestamps for the AI provider and notification preferences. Never returns the password hash.',
+  })
+  @ApiOkResponse({ type: PublicUserDto, description: 'The current user.' })
+  @ApiErrors(401)
   me(@CurrentUser() user: AuthUser): Promise<PublicUserDto> {
     return this.auth.me(user.id);
   }
 
   @Get('config')
   @ApiOperation({
-    summary: 'Phương thức đăng nhập đang bật (để FE ẩn/hiện nút Google)',
+    summary: 'Get the enabled sign-in methods',
+    description:
+      'Tells the web client whether Google sign-in is configured on this server so it can show or hide the Google button. ' +
+      'No authentication required.',
   })
-  @ApiOkResponse({ type: AuthConfigDto })
+  @ApiOkResponse({ type: AuthConfigDto, description: 'Sign-in method flags.' })
   getConfig(): AuthConfigDto {
     return { googleEnabled: isGoogleEnabled(this.config) };
   }
@@ -166,11 +201,13 @@ export class AuthController {
   @Get('google')
   @UseGuards(GoogleStartGuard)
   @ApiOperation({
-    summary:
-      'Bắt đầu đăng nhập Google (chuyển hướng sang Google). 404 khi chưa cấu hình key.',
+    summary: 'Start Google sign-in',
+    description:
+      "Browser entry point of the Google OAuth flow: redirects the user to Google's consent screen. Open it with a normal " +
+      'page navigation, not with fetch or XHR. Available only when the server has Google credentials configured.',
   })
-  @ApiFoundResponse({ description: 'Chuyển hướng sang accounts.google.com' })
-  @ApiNotFoundResponse({ description: 'Chưa bật Google OAuth' })
+  @ApiFoundResponse({ description: 'Redirect to accounts.google.com.' })
+  @ApiNotFoundResponse({ description: 'Google sign-in is not configured on this server.' })
   googleStart(): void {
     // GoogleStartGuard (passport) đã chuyển hướng.
   }
@@ -178,10 +215,14 @@ export class AuthController {
   @Get('google/callback')
   @UseGuards(GoogleCallbackGuard)
   @ApiOperation({
-    summary:
-      'Google gọi về sau khi đăng nhập; đặt cookie rồi chuyển về {PUBLIC_WEB_URL}/auth/callback',
+    summary: 'Google sign-in callback',
+    description:
+      'Called by Google after the user consents; not meant to be called by API clients. Finds or creates the account by ' +
+      'verified Google email, sets the refresh cookie `nf_rt` and redirects the browser to `{PUBLIC_WEB_URL}/auth/callback`. ' +
+      'The web app then calls `POST /auth/refresh` to obtain an access token. On failure the redirect carries an `error` ' +
+      'query parameter: `google_failed` (Google returned no profile) or `email_unverified` (the Google email is not verified).',
   })
-  @ApiFoundResponse({ description: 'Về trang web, lỗi thì kèm ?error=' })
+  @ApiFoundResponse({ description: 'Redirect to the web app, with `?error=` when sign-in failed.' })
   async googleCallback(
     @Req() req: Request,
     @Res() res: Response,

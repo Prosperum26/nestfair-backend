@@ -10,14 +10,14 @@ import {
 } from 'class-validator';
 
 export class LoginDto {
-  @ApiProperty({ example: 'hung.tm@student.uit.edu.vn' })
+  @ApiProperty({ example: 'hung.tm@student.uit.edu.vn', description: 'Account email. Trimmed and lower-cased before lookup.' })
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   )
   @IsEmail({}, { message: 'Email không hợp lệ.' })
   email: string;
 
-  @ApiProperty({ example: 'MatKhau123' })
+  @ApiProperty({ example: 'Password123', maxLength: 72, description: 'Account password.' })
   @IsString()
   @MinLength(1, { message: 'Bạn chưa nhập mật khẩu.' })
   @MaxLength(72)
@@ -25,7 +25,7 @@ export class LoginDto {
 
   @ApiPropertyOptional({
     default: true,
-    description: 'false = phiên mất khi đóng trình duyệt.',
+    description: 'true (default) keeps the session for 7 days; false makes the refresh cookie a browser-session cookie that disappears when the browser closes.',
   })
   @IsOptional()
   @IsBoolean()

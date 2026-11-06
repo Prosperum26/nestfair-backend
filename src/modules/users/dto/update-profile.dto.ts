@@ -17,7 +17,7 @@ const stripSpaces = ({ value }: { value: unknown }) =>
  * Email và mật khẩu không đổi được qua route này (forbidNonWhitelisted trả 400).
  */
 export class UpdateProfileDto {
-  @ApiPropertyOptional({ example: 'Trần Minh Hùng' })
+  @ApiPropertyOptional({ example: 'Minh Hung Tran', minLength: 2, maxLength: 80, description: 'New display name (2-80 characters). Cannot be cleared; sending null is a 400.' })
   // Không dùng IsOptional: họ tên không được xóa, gửi null phải ra 400.
   @ValidateIf((o: UpdateProfileDto) => o.fullName !== undefined)
   @Transform(({ value }: { value: unknown }) =>
@@ -27,7 +27,7 @@ export class UpdateProfileDto {
   @Length(2, 80, { message: 'Họ và tên cần từ 2 đến 80 ký tự.' })
   fullName?: string;
 
-  @ApiPropertyOptional({ type: String, nullable: true, example: '0901234567' })
+  @ApiPropertyOptional({ type: String, nullable: true, example: '0901234567', pattern: '^0\\d{9}$', description: 'Mobile number (10 digits starting with 0, whitespace ignored). Send null to clear it.' })
   @IsOptional()
   @Transform(stripSpaces)
   @Matches(/^0\d{9}$/, { message: 'Số điện thoại cần 10 số, bắt đầu bằng 0.' })
@@ -38,7 +38,7 @@ export class UpdateProfileDto {
     nullable: true,
     example: '970407',
     description:
-      'Mã BIN Napas 6 số của ngân hàng (VietQR). Đi cùng bankAccount.',
+      'Napas BIN (6 digits) of the bank, used for VietQR. Must be set together with `bankAccount`; send null (with `bankAccount: null`) to clear both.',
   })
   @IsOptional()
   @Matches(/^\d{6}$/, { message: 'Mã ngân hàng không hợp lệ.' })
@@ -48,7 +48,7 @@ export class UpdateProfileDto {
     type: String,
     nullable: true,
     example: '19036780123',
-    description: '6–19 chữ số. Đi cùng bankBin.',
+    description: 'Bank account number, 6-19 digits, whitespace ignored. Must be set together with `bankBin`.',
   })
   @IsOptional()
   @Transform(stripSpaces)

@@ -17,9 +17,6 @@ import { API_TAGS, buildOpenApiDocument, setupSwagger } from './../src/swagger.s
  * `PENDING_TAGS` lists tags whose documentation is not rewritten yet; it shrinks module by module and ends empty.
  */
 const PENDING_TAGS = new Set<string>([
-  'health',
-  'auth',
-  'users',
   'houses',
   'membership',
   'rule-proposals',
@@ -103,11 +100,11 @@ describe('OpenAPI document (docs audit)', () => {
     expect(report(offenders)).toBe('');
   });
 
-  it('gives every operation a documented success response with a schema (or 204)', () => {
+  it('gives every operation a documented success response with a schema (or 204 / redirect)', () => {
     const offenders = active()
       .filter(({ op }) => {
-        const ok = Object.entries(op.responses ?? {}).filter(([code]) => code.startsWith('2'));
-        return ok.length === 0 || !ok.some(([code, r]) => code === '204' || r.content?.['application/json']?.schema || r.content?.['image/png']);
+        const ok = Object.entries(op.responses ?? {}).filter(([code]) => /^[23]/.test(code));
+        return ok.length === 0 || !ok.some(([code, r]) => code === '204' || code.startsWith('3') || r.content?.['application/json']?.schema || r.content?.['image/png']);
       })
       .map((o) => o.id);
     expect(report(offenders)).toBe('');

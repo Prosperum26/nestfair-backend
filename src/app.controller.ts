@@ -8,8 +8,16 @@ export class AppController {
   constructor(private readonly appService: AppService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Kiểm tra server và kết nối database' })
-  @ApiOkResponse({ description: 'Server và database đang chạy' })
+  @ApiOperation({
+    summary: 'Health check',
+    description:
+      'Liveness and readiness probe for the hosting platform. Runs `SELECT 1` against PostgreSQL, so it also proves the ' +
+      'database connection works. Returns 500 if the database is unreachable. No authentication required.',
+  })
+  @ApiOkResponse({
+    description: 'The server and the database are up.',
+    schema: { type: 'object', properties: { status: { type: 'string', example: 'ok' }, db: { type: 'string', example: 'up' } } },
+  })
   health() {
     return this.appService.health();
   }
