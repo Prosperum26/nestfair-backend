@@ -6,6 +6,8 @@ import { EventsModule } from '../events/events.module.js';
 import { ExpensesModule } from '../expenses/expenses.module.js';
 import { HousesModule } from '../houses/houses.module.js';
 import { SwapsModule } from '../swaps/swaps.module.js';
+import { UploadsModule } from '../uploads/uploads.module.js';
+import { DissolveService } from './dissolve.service.js';
 import { MembershipController } from './membership.controller.js';
 import { MembershipService } from './membership.service.js';
 
@@ -14,8 +16,8 @@ import { MembershipService } from './membership.service.js';
  * mà các module đó lại import HousesModule (để dùng guard): đặt ở đây tránh vòng import.
  */
 @Module({
-  imports: [AuthModule, HousesModule, ExpensesModule, SwapsModule, ChoresModule, ActivityModule, EventsModule],
+  imports: [AuthModule, HousesModule, ExpensesModule, SwapsModule, ChoresModule, ActivityModule, EventsModule, UploadsModule],
   controllers: [MembershipController],
-  providers: [MembershipService],
+  providers: [MembershipService, DissolveService],
 })
 export class MembershipModule {}

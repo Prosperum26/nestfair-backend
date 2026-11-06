@@ -15,7 +15,10 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentMembership } from '../houses/decorators/current-membership.decorator.js';
 import { type HouseMembership, HouseMemberGuard } from '../houses/guards/house-member.guard.js';
 import { HouseRoles, HouseRolesGuard } from '../houses/guards/house-roles.guard.js';
+import { DissolveService } from './dissolve.service.js';
 import {
+  DissolveHouseDto,
+  DissolveHouseResultDto,
   KickMemberDto,
   LeaveHouseDto,
   LeavePreviewDto,
@@ -33,7 +36,10 @@ import { MembershipService } from './membership.service.js';
 @UseGuards(JwtAuthGuard, HouseMemberGuard)
 @Controller('houses/:houseId')
 export class MembershipController {
-  constructor(private readonly membership: MembershipService) {}
+  constructor(
+    private readonly membership: MembershipService,
+    private readonly dissolveService: DissolveService,
+  ) {}
 
   @Get('members/:userId/leave-preview')
   @ApiParam({ name: 'userId', format: 'uuid' })
@@ -84,5 +90,19 @@ export class MembershipController {
   @ApiNotFoundResponse({ description: 'Người này không ở trong nhà' })
   transferAdmin(@CurrentMembership() membership: HouseMembership, @Body() dto: TransferAdminDto): Promise<TransferAdminResultDto> {
     return this.membership.transferAdmin(membership, dto);
+  }
+
+  @Post('dissolve')
+  @HttpCode(HttpStatus.OK)
+  @HouseRoles('ADMIN')
+  @UseGuards(HouseRolesGuard)
+  @ApiOperation({
+    summary: 'Trưởng phòng giải tán nhà (mềm): mọi người rời nhà, việc dở được đóng, ảnh trên Cloudinary được dọn. Cần gõ đúng tên nhà và cả nhà hết nợ.',
+  })
+  @ApiOkResponse({ type: DissolveHouseResultDto })
+  @ApiBadRequestResponse({ description: 'CONFIRM_NAME_MISMATCH' })
+  @ApiConflictResponse({ description: 'HAS_BALANCE (kèm membersWithBalance), ALREADY_DISSOLVED' })
+  dissolve(@CurrentMembership() membership: HouseMembership, @Body() dto: DissolveHouseDto): Promise<DissolveHouseResultDto> {
+    return this.dissolveService.dissolve(membership, dto);
   }
 }

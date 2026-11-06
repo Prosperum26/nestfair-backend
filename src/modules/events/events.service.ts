@@ -43,6 +43,7 @@ export type RealtimeEvent =
   | 'member:joined'
   | 'member:left'
   | 'member:role_changed'
+  | 'house:dissolved'
   | 'rule_proposal:created'
   | 'rule_proposal:decided'
   | 'session:expired'
@@ -220,6 +221,22 @@ export class EventsService {
     const payload = { userId, name, kicked };
     this.emitToHouse(houseId, 'member:left', payload);
     this.emitToUser(userId, 'member:left', payload, { houseId });
+  }
+
+  /**
+   * Nhà bị giải tán: báo từng thành viên ở room cá nhân (kể cả người đang xem nhà khác), rồi đá mọi socket
+   * khỏi room nhà. Gọi SAU commit (dữ liệu đã là đã giải tán).
+   */
+  async dissolveHouse(houseId: string, userIds: string[], name: string) {
+    for (const userId of userIds) this.emitToUser(userId, 'house:dissolved', { houseId, name }, { houseId });
+    this.presence.delete(houseId);
+    if (!this.server) return;
+    try {
+      const sockets = await this.server.in(houseRoom(houseId)).fetchSockets();
+      for (const s of sockets) s.leave(houseRoom(houseId));
+    } catch (e) {
+      this.logger.warn(`Không đá được socket khỏi nhà ${houseId}: ${(e as Error).message}`);
+    }
   }
 
   /** Đăng xuất: ngắt mọi socket của user. */
