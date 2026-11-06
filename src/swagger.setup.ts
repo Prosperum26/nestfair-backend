@@ -15,7 +15,7 @@ export const API_TAGS: readonly (readonly [name: string, description: string])[]
   ['assignments', 'A single scheduled chore occurrence: listing, photo check-in, peer verification, admin override and dispute handling.'],
   ['absences', 'Member absences, whole-house breaks and the chore audit log. The scheduler skips absent members.'],
   ['swaps', 'Chore swap requests: exchange two assignments, ask someone to cover (with a payback or a gift), the cover market, expiry and escalation, and permanent rotation swaps.'],
-  ['chore-debts', 'Chore debts created when a member covers someone else: payback assignment selection, forgiveness and reminders.'],
+  ['chore-debts', 'Chore debts created when a member covers someone else for a payback: listing the debts, choosing the payback assignment and forgiving a debt.'],
   ['wheel', 'Lucky Wheel for ad-hoc chores. The server picks the winner; clients only animate the result from a seed.'],
   ['activity', 'Live ticker of recent house activity.'],
   ['expenses', 'Shared expenses with EQUAL, CUSTOM, EXACT or ITEMIZED splits, monthly ledger, summary and net balances. Amounts are integer VND.'],
