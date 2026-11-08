@@ -89,13 +89,15 @@ export class ReminderCronService {
    * ngủ lâu thì bù ở tick sau, vẫn đúng một lần nhờ điều kiện `sentAt IS NULL`). Socket `reminder:due`
    * chỉ bắn sau khi commit — rollback thì không bắn.
    */
-  async dispatchDue(now: Date = new Date()): Promise<{ sent: number }> {
+  /** `houseIds`: chỉ quét nhắc của các nhà này (test dùng để không chạm dữ liệu của file khác). */
+  async dispatchDue(now: Date = new Date(), houseIds?: string[]): Promise<{ sent: number }> {
     const at = now.toISOString();
     const sent = await this.prisma.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<DueReminder[]>(Prisma.sql`
         WITH due AS (
           SELECT id FROM reminders
           WHERE "sentAt" IS NULL AND "remindAt" <= ${at}::timestamp
+          ${houseIds ? Prisma.sql`AND "houseId" = ANY(${houseIds}::uuid[])` : Prisma.empty}
           ORDER BY "remindAt", id
           LIMIT 200
           FOR UPDATE SKIP LOCKED

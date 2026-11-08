@@ -159,7 +159,8 @@ describe('Giải tán nhà (e2e)', () => {
     noCloud();
     await fx.as(h.H.token).post(url(h.houseId), { confirmName: h.name }).expect(200);
 
-    await fx.app.get(ScheduleService).catchUpAll(new Date());
+    // Có phạm vi để không chạm nhà của file khác (vd. Nhà 12A đang được seed); nhà đã giải tán vẫn phải bị bỏ qua.
+    await fx.app.get(ScheduleService).catchUpAll(new Date(), [h.houseId]);
 
     expect(await fx.prisma.weekSchedule.count({ where: { houseId: h.houseId } })).toBe(0);
   });

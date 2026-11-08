@@ -70,7 +70,7 @@ describe('Reminder cron (e2e)', () => {
 
       const emit = spy();
       const now = new Date();
-      const res = await cron.dispatchDue(now);
+      const res = await cron.dispatchDue(now, [houseId]);
       expect(res.sent).toBe(1);
 
       const row = await fx.prisma.reminder.findUniqueOrThrow({ where: { id: due.id } });
@@ -88,9 +88,9 @@ describe('Reminder cron (e2e)', () => {
       const due = await seedReminder({ userId: users[0].id, houseId, title: 'Đóng tiền nước', remindAt: new Date(Date.now() - MINUTE) });
 
       const emit = spy();
-      await cron.dispatchDue(new Date());
+      await cron.dispatchDue(new Date(), [houseId]);
       expect(emitsFor(emit, due.id)).toBe(1);
-      const second = await cron.dispatchDue(new Date());
+      const second = await cron.dispatchDue(new Date(), [houseId]);
       expect(second.sent).toBe(0);
       expect(emitsFor(emit, due.id)).toBe(1);
       expect(await fx.prisma.assistantMessage.count({ where: { houseId, role: 'SYSTEM' } })).toBe(1);
@@ -111,12 +111,24 @@ describe('Reminder cron (e2e)', () => {
 
       const emit = spy();
       const now = new Date();
-      const [a, b] = await Promise.all([cron.dispatchDue(now), cron.dispatchDue(now)]);
+      const [a, b] = await Promise.all([cron.dispatchDue(now, [houseId]), cron.dispatchDue(now, [houseId])]);
       expect(a.sent + b.sent).toBe(5);
       for (const id of ids) expect(emitsFor(emit, id)).toBe(1);
       const rows = await fx.prisma.reminder.findMany({ where: { id: { in: ids } } });
       expect(rows.every((r) => r.sentAt !== null)).toBe(true);
       expect(await fx.prisma.assistantMessage.count({ where: { houseId, role: 'SYSTEM' } })).toBe(5);
+    });
+
+    it('(3b) có houseIds → chỉ gửi nhắc của các nhà đó, nhắc đến hạn của nhà khác giữ nguyên', async () => {
+      const a = await fx.houseWith(['Hùng', 'Thiện']);
+      const b = await fx.houseWith(['Mai', 'Quân']);
+      const mine = await seedReminder({ userId: a.users[0].id, houseId: a.houseId, title: 'Nhà A', remindAt: new Date(Date.now() - MINUTE) });
+      const other = await seedReminder({ userId: b.users[0].id, houseId: b.houseId, title: 'Nhà B', remindAt: new Date(Date.now() - MINUTE) });
+
+      const res = await cron.dispatchDue(new Date(), [a.houseId]);
+      expect(res.sent).toBe(1);
+      expect((await fx.prisma.reminder.findUniqueOrThrow({ where: { id: mine.id } })).sentAt).not.toBeNull();
+      expect((await fx.prisma.reminder.findUniqueOrThrow({ where: { id: other.id } })).sentAt).toBeNull();
     });
 
     it('(4) nhắc chưa đến hạn / đã gửi (sentAt != null) → không bị chạm', async () => {
@@ -126,7 +138,7 @@ describe('Reminder cron (e2e)', () => {
       const sent = await seedReminder({ userId: users[0].id, houseId, title: 'Đã gửi', remindAt: past, sentAt: past });
 
       const emit = spy();
-      const res = await cron.dispatchDue(new Date());
+      const res = await cron.dispatchDue(new Date(), [houseId]);
       expect(res.sent).toBe(0);
       expect(emitsFor(emit, future.id)).toBe(0);
       expect(emitsFor(emit, sent.id)).toBe(0);
