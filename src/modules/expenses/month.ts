@@ -2,10 +2,6 @@
 const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
 const MONTH_KEY = /^(\d{4})-(0[1-9]|1[0-2])$/;
 
-export function isValidMonthKey(value: string): boolean {
-  return MONTH_KEY.test(value);
-}
-
 /** Khóa tháng (giờ VN) chứa thời điểm `date`. */
 export function monthKeyOf(date: Date): string {
   const vn = new Date(date.getTime() + VN_OFFSET_MS);

@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { isValidMonthKey, monthKeyOf, monthRange } from './month.js';
+import { MONTH_PATTERN } from './dto/list-expenses.query.js';
+import { monthKeyOf, monthRange } from './month.js';
 
 describe('month (giờ Việt Nam, UTC+7)', () => {
-  it('isValidMonthKey', () => {
-    expect(isValidMonthKey('2026-10')).toBe(true);
-    expect(isValidMonthKey('2026-01')).toBe(true);
+  it('MONTH_PATTERN (query ?month=) nhận YYYY-MM hợp lệ, từ chối sai định dạng', () => {
+    expect(MONTH_PATTERN.test('2026-10')).toBe(true);
+    expect(MONTH_PATTERN.test('2026-01')).toBe(true);
     for (const bad of ['2026-13', '2026-00', '2026-1', '26-10', '2026/10', '2026-10-01', '']) {
-      expect(isValidMonthKey(bad), bad).toBe(false);
+      expect(MONTH_PATTERN.test(bad), bad).toBe(false);
     }
   });
 
