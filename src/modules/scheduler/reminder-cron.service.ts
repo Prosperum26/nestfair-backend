@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { dateOf } from '../chores/schedule-context.js';
 import { type DateStr, dueAtOf, toDateStr } from '../chores/week.js';
 import { EventsService } from '../events/events.service.js';
+import { type NotificationInput, NotificationsService } from '../notifications/notifications.service.js';
 import { resolveNotificationPrefs } from '../users/notification-prefs.js';
 
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
@@ -75,7 +76,19 @@ export class ReminderCronService {
     private readonly events: EventsService,
     @Inject(DIGEST_SOURCES) private readonly digestSources: DigestSource[],
     private readonly config: ConfigService<Env, true>,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  /** Thông báo chuông cho các nhắc vừa gửi; `reminder:<id>` chống tạo hai lần. */
+  private dueNotifications(rows: readonly { id: string; userId: string; houseId: string; title: string }[]): NotificationInput[] {
+    return rows.map((r) => ({
+      userId: r.userId,
+      houseId: r.houseId,
+      type: 'REMINDER_DUE',
+      params: { reminderId: r.id, title: r.title },
+      dedupeKey: `reminder:${r.id}`,
+    }));
+  }
 
   private get isTest() {
     return this.config.get('NODE_ENV', { infer: true }) === 'test';
@@ -108,6 +121,7 @@ export class ReminderCronService {
       if (rows.length > 0) {
         const data = await this.systemMessages(tx, rows);
         await tx.assistantMessage.createMany({ data });
+        await this.notifications.notify(tx, this.dueNotifications(rows));
       }
       return rows;
     });
@@ -146,6 +160,7 @@ export class ReminderCronService {
           });
           const data = await this.systemMessages(tx, [row]);
           await tx.assistantMessage.createMany({ data });
+          await this.notifications.notify(tx, this.dueNotifications([row]));
           return row;
         });
         created++;

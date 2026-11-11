@@ -50,6 +50,7 @@ model User {
   ruleProposals       RuleProposal[]
   assistantMessages   AssistantMessage[]
   reminders           Reminder[]
+  notifications       Notification[]
 
   @@map("users")
 }
@@ -112,6 +113,7 @@ model House {
   receiptScans  ReceiptScan[]
   assistantMessages AssistantMessage[]
   reminders Reminder[]
+  notifications Notification[]
   ruleProposals RuleProposal[]
   balanceAdjustments BalanceAdjustment[]
 
@@ -942,4 +944,35 @@ model Reminder {
   @@unique([userId, dedupeKey])
   @@index([userId, remindAt])
   @@map("reminders")
+}
+
+enum NotificationType {
+  /// Có khoản chi mới mà người nhận có phần phải trả.
+  EXPENSE_CREATED
+  /// Có người báo đã chuyển tiền cho người nhận, chờ xác nhận.
+  DEBT_PAID
+  /// Nhắc nhở cá nhân tới giờ (kể cả bản tin việc nhà buổi sáng).
+  REMINDER_DUE
+}
+
+/// Hộp thông báo cá nhân (chuông). Chỉ chủ nhân đọc được; `params` để client ghép câu.
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @db.Uuid
+  houseId   String           @db.Uuid
+  type      NotificationType
+  /// EXPENSE_CREATED: expenseId, title, payerName, share. DEBT_PAID: settlementId, fromName, amount.
+  /// REMINDER_DUE: reminderId, title.
+  params    Json
+  readAt    DateTime?
+  /// Chống tạo hai lần cho cùng một sự kiện (vd. "expense:<id>").
+  dedupeKey String?
+  createdAt DateTime         @default(now())
+
+  house House @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, createdAt])
+  @@map("notifications")
 }

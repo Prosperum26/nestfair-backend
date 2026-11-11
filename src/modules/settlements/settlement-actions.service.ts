@@ -3,6 +3,7 @@ import { coded } from '../../common/coded-exception.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { EventsService } from '../events/events.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { monthRange } from '../expenses/month.js';
 import { LedgerService } from '../expenses/ledger.service.js';
 import type { HouseMembership } from '../houses/guards/house-member.guard.js';
@@ -27,6 +28,7 @@ export class SettlementActionsService {
     private readonly ledger: LedgerService,
     private readonly cloudinary: CloudinaryService,
     private readonly events: EventsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /** Lịch sử tất toán, mới nhất trước. Không truyền `month` thì lấy toàn bộ. */
@@ -83,7 +85,7 @@ export class SettlementActionsService {
           throw coded(HttpStatus.UNPROCESSABLE_ENTITY, 'SETTLEMENT_AMOUNT_EXCEEDS_DEBT', `Số tiền tối đa có thể trả cho người này là ${fmt(limit)}.`);
         }
 
-        return tx.settlement.create({
+        const row = await tx.settlement.create({
           data: {
             houseId: m.houseId,
             fromUserId: m.userId,
@@ -94,6 +96,17 @@ export class SettlementActionsService {
           },
           include: SETTLEMENT_INCLUDE,
         });
+        // Báo cho người nhận tiền để họ vào xác nhận, cùng transaction với báo chuyển.
+        await this.notifications.notify(tx, [
+          {
+            userId: row.toUserId,
+            houseId: m.houseId,
+            type: 'DEBT_PAID',
+            params: { settlementId: row.id, fromName: row.from.fullName, amount: row.amount },
+            dedupeKey: `settlement:${row.id}`,
+          },
+        ]);
+        return row;
       });
     } catch (error) {
       // Lưới an toàn cuối: partial unique index (houseId, fromUserId, toUserId) WHERE status = 'PENDING'.
