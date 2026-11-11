@@ -227,7 +227,7 @@ describe('Listing photos API (e2e)', () => {
         post(admin.token, houseId, 'BEDROOM', good()),
       ]);
 
-      expect([a.status, b.status].sort()).toEqual([201, 422]);
+      expect([a.status, b.status].sort((x, y) => x - y)).toEqual([201, 422]);
       const photos = await fx.prisma.listingPhoto.findMany({ where: { listingId: listing.id, category: 'BEDROOM' } });
       expect(photos).toHaveLength(6);
       expect(new Set(photos.map((p) => p.sortOrder)).size).toBe(6);

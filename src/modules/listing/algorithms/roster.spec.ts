@@ -32,7 +32,8 @@ describe('anonymousLabels', () => {
   it('xác định: cùng đầu vào cho cùng nhãn, không phụ thuộc thứ tự mảng truyền vào', () => {
     const a = anonymousLabels(LISTING, MEMBERS);
     const b = anonymousLabels(LISTING, [...MEMBERS].reverse());
-    expect([...a.entries()].sort()).toEqual([...b.entries()].sort());
+    const byMember = ([x]: [string, string], [y]: [string, string]) => x.localeCompare(y);
+    expect([...a.entries()].sort(byMember)).toEqual([...b.entries()].sort(byMember));
   });
 
   it('thứ tự nhãn là thứ tự tăng dần của sha256(listingId:memberId)', () => {
