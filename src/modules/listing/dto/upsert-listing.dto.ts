@@ -12,11 +12,25 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateBy,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { GenderWanted } from '../../../generated/prisma/enums.js';
+import { isGoogleMapsUrl, MAP_URL_MAX } from '../algorithms/map-url.js';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
+
+/** Chỉ nhận link Google Maps (luật ở `isGoogleMapsUrl`). */
+function IsGoogleMapsUrl(): PropertyDecorator {
+  return ValidateBy({
+    name: 'isGoogleMapsUrl',
+    validator: {
+      validate: (value: unknown) => typeof value === 'string' && isGoogleMapsUrl(value),
+      defaultMessage: () => 'Chỉ nhận link Google Maps (https, tối đa 500 ký tự).',
+    },
+  });
+}
 
 export const MAX_RENT = 50_000_000;
 export const MAX_FEE = 10_000_000;
@@ -43,6 +57,21 @@ export class UpsertListingDto {
   @IsString()
   @Length(3, 120, { message: 'Vị trí cần từ 3 đến 120 ký tự.' })
   locationText: string;
+
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    maxLength: MAP_URL_MAX,
+    example: 'https://www.google.com/maps/search/?api=1&query=10.87,106.803',
+    description:
+      'Google Maps link of the area (https only; google.com/maps, google.com.vn/maps, maps.google.com, maps.app.goo.gl or goo.gl/maps). ' +
+      'Empty string or null removes it. The server only checks the text and never opens the link.',
+  })
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() || null : value))
+  @ValidateIf((o: UpsertListingDto) => o.mapUrl !== null && o.mapUrl !== undefined)
+  @IsString({ message: 'Link bản đồ không hợp lệ.' })
+  @IsGoogleMapsUrl()
+  mapUrl?: string | null;
 
   @ApiProperty({ enum: GenderWanted, enumName: 'GenderWanted', description: 'Gender the house is looking for: MALE, FEMALE or ANY.' })
   @IsEnum(GenderWanted, { message: 'Giới tính cần tìm không hợp lệ.' })

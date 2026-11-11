@@ -45,6 +45,9 @@ export class ListingDto {
   @ApiProperty({ description: 'Short location text, for example the alley and distance to the university.' })
   locationText: string;
 
+  @ApiProperty({ type: String, nullable: true, example: 'https://www.google.com/maps/search/?api=1&query=10.87,106.803', description: 'Google Maps link of the area, or null when not set.' })
+  mapUrl: string | null;
+
   @ApiProperty({ enum: GenderWanted, enumName: 'GenderWanted', description: 'Gender the house is looking for: MALE, FEMALE or ANY.' })
   genderWanted: GenderWanted;
 

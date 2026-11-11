@@ -287,10 +287,35 @@ describe('Listing admin API (e2e)', () => {
       ['description quá 1000 ký tự', { description: 'x'.repeat(1001) }],
       ['roommateExpectations quá 500 ký tự', { roommateExpectations: 'x'.repeat(501) }],
       ['showChoreSchedule không phải boolean', { showChoreSchedule: 'yes' }],
+      ['mapUrl không phải Google Maps', { mapUrl: 'https://evil.com/maps' }],
+      ['mapUrl giả host google.com.evil.com', { mapUrl: 'https://google.com.evil.com/maps' }],
+      ['mapUrl dùng http', { mapUrl: 'http://www.google.com/maps/place/UIT' }],
+      ['mapUrl là javascript:', { mapUrl: 'javascript:alert(1)' }],
+      ['mapUrl là trang Google Search', { mapUrl: 'https://www.google.com/search?q=uit' }],
+      ['mapUrl quá 500 ký tự', { mapUrl: 'https://www.google.com/maps?q=' + 'a'.repeat(500) }],
+      ['mapUrl là số', { mapUrl: 123 }],
     ])('400 khi %s', async (_label, over) => {
       const { houseId, admin } = await setup();
       await fx.as(admin.token).put(url(houseId), body(over)).expect(400);
       expect(await fx.prisma.roomListing.count({ where: { houseId } })).toBe(0);
+    });
+
+    it('mapUrl: lưu link Google Maps (cắt khoảng trắng), chuỗi rỗng hoặc null thì xóa, bỏ qua thì null', async () => {
+      const { houseId, admin } = await setup();
+      const link = 'https://www.google.com/maps/search/?api=1&query=10.87,106.803';
+      const saved = await fx.as(admin.token).put(url(houseId), body({ mapUrl: `  ${link}  ` })).expect(200);
+      expect(saved.body.listing.mapUrl).toBe(link);
+      expect((await fx.prisma.roomListing.findUniqueOrThrow({ where: { houseId } })).mapUrl).toBe(link);
+
+      const cleared = await fx.as(admin.token).put(url(houseId), body({ mapUrl: '' })).expect(200);
+      expect(cleared.body.listing.mapUrl).toBeNull();
+
+      await fx.as(admin.token).put(url(houseId), body({ mapUrl: 'https://maps.app.goo.gl/AbCdEf123' })).expect(200);
+      const nulled = await fx.as(admin.token).put(url(houseId), body({ mapUrl: null })).expect(200);
+      expect(nulled.body.listing.mapUrl).toBeNull();
+
+      const omitted = await fx.as(admin.token).put(url(houseId), body()).expect(200);
+      expect(omitted.body.listing.mapUrl).toBeNull();
     });
 
     it('thiếu field bắt buộc thì 400', async () => {

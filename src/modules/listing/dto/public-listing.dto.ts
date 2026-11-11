@@ -64,6 +64,9 @@ export class PublicListingOpenDto {
   @ApiProperty({ description: 'Short location text.' })
   locationText: string;
 
+  @ApiProperty({ type: String, nullable: true, example: 'https://www.google.com/maps/search/?api=1&query=10.87,106.803', description: 'Google Maps link of the area, or null when the owner did not add one. A location taken from GPS is rounded to about 100 m. Only returned while the listing is open.' })
+  mapUrl: string | null;
+
   @ApiProperty({ enum: GenderWanted, enumName: 'GenderWanted', description: 'Gender wanted: MALE, FEMALE or ANY.' })
   genderWanted: GenderWanted;
 
