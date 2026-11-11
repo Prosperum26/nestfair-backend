@@ -24,6 +24,8 @@ export async function seedListing(
     closeReason: null,
     closedAt: null,
     locationText: 'Hẻm 51 Linh Trung, Thủ Đức · 5 phút đi bộ tới UIT',
+    // Khu Linh Trung gần UIT, tọa độ làm tròn 3 chữ số (~100m) như khi lấy vị trí hiện tại.
+    mapUrl: 'https://www.google.com/maps/search/?api=1&query=10.869,106.802',
     genderWanted: 'ANY',
     rentPerMonth: 1_200_000,
     otherFees: [
