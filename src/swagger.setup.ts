@@ -23,6 +23,7 @@ export const API_TAGS: readonly (readonly [name: string, description: string])[]
   ['receipts', 'Receipt OCR with Gemini Vision. The result is only a draft; nothing is saved to the ledger until the user confirms an expense.'],
   ['assistant', 'Private AI housemate assistant. Suggested actions are buttons only; the AI never writes data by itself.'],
   ['reminders', 'Personal reminders created by the user, by the system or from an assistant suggestion.'],
+  ['notifications', 'Personal notification inbox behind the bell: new expenses with a share for the user, transfers waiting for confirmation and reminders that fired. Honors the notification preferences.'],
   ['listings', 'Roommate-finding listing of a house (one per house): edit the content, manage photos, publish, hide, close and reopen it. Only the admin can write.'],
   ['public-listings', 'Public, unauthenticated view of a published listing by slug. Exposes no email, bank number or member names.'],
 ];
