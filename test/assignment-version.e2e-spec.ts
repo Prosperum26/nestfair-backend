@@ -28,7 +28,7 @@ describe('ChoreAssignment.version (e2e)', () => {
   const override = (h: House, id: string, body: object) => fx.as(h.users[0].token).patch(`/api/v1/assignments/${id}/override`, { reason: 'Trưởng phòng can thiệp', ...body });
 
   /** Hàm này chạy `act` rồi khẳng định version của ca đúng +1. */
-  async function bumps(h: House, id: string, act: () => Promise<unknown>) {
+  async function bumps(id: string, act: () => Promise<unknown>) {
     const before = await version(id);
     await act();
     expect(await version(id)).toBe(before + 1);
@@ -38,50 +38,50 @@ describe('ChoreAssignment.version (e2e)', () => {
     const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
     const slot = (over: Parameters<typeof makeAssignment>[2]) => makeAssignment(fx, h, { assignee: 1, dueAt: inDays(3), ...over });
     const reassign = await slot({});
-    await bumps(h, reassign.id, () => override(h, reassign.id, { action: 'REASSIGN', userId: h.users[2].id }).expect(200));
+    await bumps(reassign.id, () => override(h, reassign.id, { action: 'REASSIGN', userId: h.users[2].id }).expect(200));
     const cancel = await slot({});
-    await bumps(h, cancel.id, () => override(h, cancel.id, { action: 'CANCEL' }).expect(200));
+    await bumps(cancel.id, () => override(h, cancel.id, { action: 'CANCEL' }).expect(200));
     const done = await slot({ status: 'PENDING_VERIFY', submittedAt: new Date() });
-    await bumps(h, done.id, () => override(h, done.id, { action: 'FORCE_DONE' }).expect(200));
+    await bumps(done.id, () => override(h, done.id, { action: 'FORCE_DONE' }).expect(200));
     const rejected = await slot({ status: 'PENDING_VERIFY', submittedAt: new Date() });
-    await bumps(h, rejected.id, () => override(h, rejected.id, { action: 'FORCE_REJECT' }).expect(200));
+    await bumps(rejected.id, () => override(h, rejected.id, { action: 'FORCE_REJECT' }).expect(200));
   });
 
   it('duyệt (APPROVED và REJECTED) tăng version', async () => {
     const h = await fx.houseWith(['Hùng', 'Thiện']);
     const a = await makeAssignment(fx, h, { assignee: 1, status: 'PENDING_VERIFY', submittedAt: new Date() });
-    await bumps(h, a.id, () => fx.as(h.users[0].token).patch(`/api/v1/assignments/${a.id}/verify`, { decision: 'APPROVED' }).expect(200));
+    await bumps(a.id, () => fx.as(h.users[0].token).patch(`/api/v1/assignments/${a.id}/verify`, { decision: 'APPROVED' }).expect(200));
     const b = await makeAssignment(fx, h, { assignee: 1, status: 'PENDING_VERIFY', submittedAt: new Date() });
-    await bumps(h, b.id, () => fx.as(h.users[0].token).patch(`/api/v1/assignments/${b.id}/verify`, { decision: 'REJECTED', reason: 'Ảnh bị mờ quá' }).expect(200));
+    await bumps(b.id, () => fx.as(h.users[0].token).patch(`/api/v1/assignments/${b.id}/verify`, { decision: 'REJECTED', reason: 'Ảnh bị mờ quá' }).expect(200));
   });
 
   it('check-in tăng version', async () => {
     const h = await fx.houseWith(['Hùng', 'Thiện']);
     const a = await makeAssignment(fx, h, { assignee: 1, dueAt: inDays(2) });
-    await bumps(h, a.id, () => fx.as(h.users[1].token).post(`/api/v1/assignments/${a.id}/checkin`).attach('photo', png(), { filename: 'p.png', contentType: 'image/png' }).expect(200));
+    await bumps(a.id, () => fx.as(h.users[1].token).post(`/api/v1/assignments/${a.id}/checkin`).attach('photo', png(), { filename: 'p.png', contentType: 'image/png' }).expect(200));
   });
 
   it('khai vắng (dời ca cho người khác) tăng version', async () => {
     const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
     const date = addDays(toDateStr(new Date()), 4);
     const a = await makeAssignment(fx, h, { assignee: 1, occurrenceDate: date, dueAt: inDays(4) });
-    await bumps(h, a.id, () => fx.as(h.users[1].token).post(`/api/v1/houses/${h.houseId}/absences`, { startDate: date, endDate: date }).expect(201));
+    await bumps(a.id, () => fx.as(h.users[1].token).post(`/api/v1/houses/${h.houseId}/absences`, { startDate: date, endDate: date }).expect(201));
     expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: a.id } })).assigneeId).not.toBe(h.memberId(h.users[1]));
   });
 
   it('cron: markMissed và autoApprove tăng version', async () => {
     const h = await fx.houseWith(['Hùng', 'Thiện']);
     const missed = await makeAssignment(fx, h, { assignee: 1, dueAt: new Date(Date.now() - 5 * HOUR) });
-    await bumps(h, missed.id, () => cron.markMissed(new Date(), [h.houseId]));
+    await bumps(missed.id, () => cron.markMissed(new Date(), [h.houseId]));
     const auto = await makeAssignment(fx, h, { assignee: 1, status: 'PENDING_VERIFY', submittedAt: new Date(Date.now() - 49 * HOUR) });
-    await bumps(h, auto.id, () => cron.autoApprove(new Date(), [h.houseId]));
+    await bumps(auto.id, () => cron.autoApprove(new Date(), [h.houseId]));
   });
 
   it('hủy ca do nghỉ cả nhà tăng version', async () => {
     const h = await fx.houseWith(['Hùng', 'Thiện']);
     const date = addDays(toDateStr(new Date()), 3);
     const a = await makeAssignment(fx, h, { assignee: 1, occurrenceDate: date, dueAt: inDays(3) });
-    await bumps(h, a.id, () => fx.as(h.users[0].token).post(`/api/v1/houses/${h.houseId}/breaks`, { startDate: date, endDate: date }).expect(201));
+    await bumps(a.id, () => fx.as(h.users[0].token).post(`/api/v1/houses/${h.houseId}/breaks`, { startDate: date, endDate: date }).expect(201));
     expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: a.id } })).status).toBe('CANCELLED');
   });
 
@@ -95,7 +95,7 @@ describe('ChoreAssignment.version (e2e)', () => {
       .set('Idempotency-Key', randomUUID())
       .expect(201);
 
-    await bumps(h, a.id, () => fx.as(h.users[0].token).patch(`/api/v1/houses/${h.houseId}/chores/${a.choreId}`, { isActive: false }).expect(200));
+    await bumps(a.id, () => fx.as(h.users[0].token).patch(`/api/v1/houses/${h.houseId}/chores/${a.choreId}`, { isActive: false }).expect(200));
     expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: a.id } })).status).toBe('CANCELLED');
     const res = await fx.as(h.users[2].token).patch(`/api/v1/swaps/${created.body.id}/accept`).set('Idempotency-Key', randomUUID()).expect(409);
     expect(res.body.code).toBe('SLOT_CHANGED');
@@ -112,7 +112,7 @@ describe('ChoreAssignment.version (e2e)', () => {
     const log = await fx.prisma.luckyWheelLog.findUniqueOrThrow({ where: { id: spin.body.spinId } });
     expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: log.assignmentId } })).source).toBe('WHEEL');
 
-    await bumps(h, log.assignmentId, () => fx.as(h.users[0].token).post(`/api/v1/wheel/spins/${spin.body.spinId}/void`, { reason: 'Gõ sai tên việc' }).expect(200));
+    await bumps(log.assignmentId, () => fx.as(h.users[0].token).post(`/api/v1/wheel/spins/${spin.body.spinId}/void`, { reason: 'Gõ sai tên việc' }).expect(200));
     expect((await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: log.assignmentId } })).status).toBe('CANCELLED');
   });
 

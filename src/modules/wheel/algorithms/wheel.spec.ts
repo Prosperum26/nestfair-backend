@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildSlices, pickLandingIndex, pickWinner, sliceCount } from './wheel.js';
+import { buildSlices, pickLandingIndex, pickWinner } from './wheel.js';
 
 const people = (n: number) => Array.from({ length: n }, (_, i) => `u${i + 1}`);
 
@@ -30,12 +30,6 @@ describe('pickWinner', () => {
 
   it('dưới 2 người thì ném lỗi (chặn ở tầng service trước)', () => {
     expect(() => pickWinner(['a'])).toThrow();
-  });
-});
-
-describe('sliceCount', () => {
-  it('k = ceil(8 / n) lát mỗi người', () => {
-    expect([2, 3, 4, 5, 8, 9, 10].map(sliceCount)).toEqual([8, 9, 8, 10, 8, 9, 10]);
   });
 });
 

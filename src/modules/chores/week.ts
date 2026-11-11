@@ -36,18 +36,6 @@ export function weekKeyOf(date: Date): string {
   return format(year, weekNo);
 }
 
-export function weekRange(weekKey: string): { start: Date; dueAt: Date } {
-  const m = WEEK_KEY.exec(weekKey);
-  if (!m || !isValidWeekKey(weekKey)) throw new Error(`weekKey không hợp lệ: ${weekKey}`);
-  const start = weekOneStart(Number(m[1])) + (Number(m[2]) - 1) * 7 * DAY_MS;
-  return { start: new Date(start), dueAt: new Date(start + 7 * DAY_MS - 1) };
-}
-
-export function shiftWeek(weekKey: string, delta: number): string {
-  const { start } = weekRange(weekKey);
-  return weekKeyOf(new Date(start.getTime() + delta * 7 * DAY_MS + DAY_MS));
-}
-
 // ---- Ngày dạng chuỗi "YYYY-MM-DD" (ngày theo giờ nhà), dùng cho thuật toán sinh lịch ----
 
 /** Ngày VN dạng "YYYY-MM-DD". */
