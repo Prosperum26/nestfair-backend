@@ -16,13 +16,9 @@ export function pickWinner(participantIds: readonly string[], rand: RandInt = ra
   return participantIds[rand(0, participantIds.length)];
 }
 
-/** Tổng số lát: mỗi người `ceil(8 / n)` lát (2 → 8, 3 → 9, 4 → 8, 5 → 10, ≥ 8 → mỗi người 1 lát). */
-export function sliceCount(n: number): number {
-  return n * Math.ceil(MIN_SLICES / n);
-}
-
 /**
- * Thứ tự lát trên vòng (userId, có lặp). Mỗi "vòng nhỏ" là một hoán vị Fisher-Yates theo `seed`,
+ * Thứ tự lát trên vòng (userId, có lặp). Mỗi người `ceil(8 / n)` lát (2 → 8, 3 → 9, 4 → 8, 5 → 10, ≥ 8 → mỗi
+ * người 1 lát). Mỗi "vòng nhỏ" là một hoán vị Fisher-Yates theo `seed`,
  * nối sao cho không có hai lát cạnh nhau cùng người, kể cả chỗ nối cuối → đầu.
  * Seed chỉ quyết định cách xếp lát để vẽ, KHÔNG quyết định người trúng.
  */
