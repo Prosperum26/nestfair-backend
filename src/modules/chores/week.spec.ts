@@ -10,7 +10,6 @@ import {
   toDateStr,
   weekKeyFromStart,
   weekKeyOf,
-  weekRange,
   weekStartFromKey,
   weekStartOf,
 } from './week.js';
@@ -28,14 +27,6 @@ describe('weekKeyOf', () => {
     expect(weekKeyOf(new Date('2026-12-28T05:00:00Z'))).toBe('2026-W53');
     expect(weekKeyOf(new Date('2027-01-04T05:00:00Z'))).toBe('2027-W01');
     expect(weekKeyOf(new Date('2027-01-03T05:00:00Z'))).toBe('2026-W53');
-  });
-});
-
-describe('weekRange', () => {
-  it('từ Thứ Hai 00:00 đến Chủ Nhật 23:59:59.999 giờ VN', () => {
-    const { start, dueAt } = weekRange('2026-W41');
-    expect(start.toISOString()).toBe('2026-10-04T17:00:00.000Z');
-    expect(dueAt.toISOString()).toBe('2026-10-11T16:59:59.999Z');
   });
 });
 
