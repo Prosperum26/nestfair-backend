@@ -4,6 +4,8 @@ import { Prisma } from '../../generated/prisma/client.js';
 import type { SplitType } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { EventsService } from '../events/events.service.js';
+import { expenseRecipients } from '../notifications/notification-rules.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import type { HouseMembership } from '../houses/guards/house-member.guard.js';
 import { CloudinaryService, publicIdFromUrl } from '../uploads/cloudinary.service.js';
 import { type UploadedImage, validateImageFile } from '../uploads/image-validation.js';
@@ -47,6 +49,7 @@ export class ExpensesService {
     private readonly prisma: PrismaService,
     private readonly cloudinary: CloudinaryService,
     private readonly events: EventsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async list(m: HouseMembership, query: ListExpensesQuery, now = new Date()): Promise<ExpenseDto[]> {
@@ -159,6 +162,17 @@ export class ExpensesService {
         });
         if (linked.count !== 1) throw scanUsed();
       }
+      // Báo cho người có phần phải trả (trừ người tạo), cùng transaction với khoản chi.
+      await this.notifications.notify(
+        tx,
+        expenseRecipients(expense.splits, m.userId).map((r) => ({
+          userId: r.userId,
+          houseId: m.houseId,
+          type: 'EXPENSE_CREATED' as const,
+          params: { expenseId: expense.id, title: expense.title, payerName: expense.payer.fullName, share: r.share },
+          dedupeKey: `expense:${expense.id}`,
+        })),
+      );
       return expense;
     });
 

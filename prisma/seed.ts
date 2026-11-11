@@ -640,6 +640,55 @@ async function seedExpenses(houseId: string, users: Record<string, { id: string 
  * "Từ trợ lý"), 1 nhắc USER thứ Sáu và 1 nhắc SYSTEM thứ Bảy (chỉ sửa được, D12). Xóa dữ liệu
  * chat + nhắc của nhà demo trước khi tạo nên chạy lại được.
  */
+/**
+ * Hộp thông báo demo (chuông): xóa thông báo cũ của nhà rồi tạo lại nên chạy lại được. Hùng có 1 khoản chi mới
+ * chưa đọc và 1 nhắc đã đọc; Mai có báo chuyển tiền của Thiện (khớp settlement PENDING 380.000đ) chờ xác nhận.
+ */
+async function seedNotifications(houseId: string, users: Record<string, { id: string }>) {
+  await prisma.notification.deleteMany({ where: { houseId } });
+  const water = await prisma.expense.findFirst({
+    where: { houseId, title: 'Tiền nước' },
+    include: { splits: { where: { userId: users.hung.id } } },
+  });
+  const pending = await prisma.settlement.findFirst({ where: { houseId, status: 'PENDING', toUserId: users.mai.id } });
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000);
+
+  if (water?.splits[0]) {
+    await prisma.notification.create({
+      data: {
+        userId: users.hung.id,
+        houseId,
+        type: 'EXPENSE_CREATED',
+        params: { expenseId: water.id, title: water.title, payerName: 'Lê Đức Thiện', share: water.splits[0].allocatedAmount },
+        dedupeKey: `expense:${water.id}`,
+        createdAt: hoursAgo(2),
+      },
+    });
+  }
+  await prisma.notification.create({
+    data: {
+      userId: users.hung.id,
+      houseId,
+      type: 'REMINDER_DUE',
+      params: { reminderId: crypto.randomUUID(), title: 'Hôm nay bạn có 1 ca: Rửa chén buổi tối' },
+      readAt: hoursAgo(5),
+      createdAt: hoursAgo(6),
+    },
+  });
+  if (pending) {
+    await prisma.notification.create({
+      data: {
+        userId: users.mai.id,
+        houseId,
+        type: 'DEBT_PAID',
+        params: { settlementId: pending.id, fromName: 'Lê Đức Thiện', amount: pending.amount },
+        dedupeKey: `settlement:${pending.id}`,
+        createdAt: hoursAgo(1),
+      },
+    });
+  }
+}
+
 async function seedAssistantReminders(houseId: string, users: Record<string, { id: string }>) {
   const hung = users.hung.id;
 
@@ -923,6 +972,7 @@ async function main() {
   await seedSwaps(house.id, users);
   await seedExpenses(house.id, users);
   await seedAssistantReminders(house.id, users);
+  await seedNotifications(house.id, users);
   await seedListing(prisma, { houseId: house.id, contactPhone: MEMBERS[0].phone });
   await seedSideHouse(users);
 

@@ -13,6 +13,7 @@ import { EventsModule } from './modules/events/events.module.js';
 import { ExpensesModule } from './modules/expenses/expenses.module.js';
 import { ReceiptsModule } from './modules/receipts/receipts.module.js';
 import { RemindersModule } from './modules/reminders/reminders.module.js';
+import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { HousesModule } from './modules/houses/houses.module.js';
 import { ListingModule } from './modules/listing/listing.module.js';
 import { MembershipModule } from './modules/membership/membership.module.js';
@@ -36,6 +37,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     ExpensesModule,
     ReceiptsModule,
     RemindersModule,
+    NotificationsModule,
     AssistantModule,
     SettlementsModule,
     ListingModule,
