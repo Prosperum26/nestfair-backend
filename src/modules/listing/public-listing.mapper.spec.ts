@@ -33,6 +33,7 @@ const open = (over: Partial<PublicListingInput['listing']> = {}): PublicListingI
     closeReason: null,
     publishedAt: new Date('2026-10-04T03:00:00Z'),
     locationText: 'Hẻm 51 Linh Trung',
+    mapUrl: 'https://www.google.com/maps/search/?api=1&query=10.87,106.803',
     genderWanted: 'ANY',
     rentPerMonth: 1_200_000,
     otherFees: [{ name: 'Wifi', amount: 60_000, ...BAIT }],
@@ -59,6 +60,7 @@ describe('toPublicListing', () => {
       closeReason: null,
       publishedAt: new Date('2026-10-04T03:00:00Z'),
       locationText: 'Hẻm 51 Linh Trung',
+      mapUrl: 'https://www.google.com/maps/search/?api=1&query=10.87,106.803',
       genderWanted: 'ANY',
       rentPerMonth: 1_200_000,
       otherFees: [{ name: 'Wifi', amount: 60_000 }],
@@ -105,6 +107,16 @@ describe('toPublicListing', () => {
     const result = toPublicListing(input);
     if (result.status !== 'OPEN') throw new Error('expected OPEN');
     expect(result.estimatedPerPerson).toBe(1_260_000);
+  });
+
+  it('tin OPEN chưa có link bản đồ: mapUrl là null', () => {
+    expect(toPublicListing(open({ mapUrl: null }))).toMatchObject({ status: 'OPEN', mapUrl: null });
+  });
+
+  it('tin CLOSED không trả link bản đồ (tin đã đóng không cần dẫn người lạ tới nhà)', () => {
+    const input = open({ status: 'CLOSED', closeReason: 'MANUAL' });
+    input.summary = null;
+    expect(JSON.stringify(toPublicListing(input))).not.toContain('google.com/maps');
   });
 
   it('roster null được giữ nguyên', () => {

@@ -45,6 +45,7 @@ describe('Public listing API (e2e)', () => {
       .as(admin.token)
       .put(adminUrl(house.houseId), {
         locationText: 'Hẻm 51 Linh Trung, Thủ Đức',
+        mapUrl: 'https://www.google.com/maps/search/?api=1&query=10.87,106.803',
         genderWanted: 'FEMALE',
         rentPerMonth: 1_200_000,
         otherFees: [{ name: 'Wifi', amount: 60_000 }],
@@ -141,6 +142,7 @@ describe('Public listing API (e2e)', () => {
         status: 'OPEN',
         closeReason: null,
         locationText: 'Hẻm 51 Linh Trung, Thủ Đức',
+        mapUrl: 'https://www.google.com/maps/search/?api=1&query=10.87,106.803',
         genderWanted: 'FEMALE',
         rentPerMonth: 1_200_000,
         otherFees: [{ name: 'Wifi', amount: 60_000 }],

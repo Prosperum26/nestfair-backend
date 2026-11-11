@@ -48,6 +48,7 @@ export class ListingService {
         status: listing.status,
         closeReason: listing.closeReason,
         locationText: listing.locationText,
+        mapUrl: listing.mapUrl,
         genderWanted: listing.genderWanted,
         rentPerMonth: listing.rentPerMonth,
         otherFees,
@@ -81,6 +82,7 @@ export class ListingService {
   async upsert(houseId: string, userId: string, dto: UpsertListingDto): Promise<ListingPayloadDto> {
     const data = {
       locationText: dto.locationText,
+      mapUrl: dto.mapUrl ?? null,
       genderWanted: dto.genderWanted,
       rentPerMonth: dto.rentPerMonth,
       otherFees: dto.otherFees.map(({ name, amount }) => ({ name, amount })),

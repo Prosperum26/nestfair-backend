@@ -799,6 +799,8 @@ model RoomListing {
   /// Có khi và chỉ khi status = CLOSED.
   closeReason          ListingCloseReason?
   locationText         String              @db.VarChar(120)
+  /// Link Google Maps (https, host Google Maps, kiểm ở DTO). GPS được làm tròn ~100m trước khi thành link.
+  mapUrl               String?             @db.VarChar(500)
   genderWanted         GenderWanted        @default(ANY)
   /// VNĐ / người / tháng.
   rentPerMonth         Int

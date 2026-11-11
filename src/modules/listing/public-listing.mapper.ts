@@ -21,6 +21,7 @@ export interface PublicListingSource {
   closeReason: ListingCloseReason | null;
   publishedAt: Date | null;
   locationText: string;
+  mapUrl: string | null;
   genderWanted: GenderWanted;
   rentPerMonth: number;
   otherFees: unknown;
@@ -79,6 +80,7 @@ export function toPublicListing(input: PublicListingInput): PublicListingDto {
     closeReason: null,
     publishedAt: listing.publishedAt,
     locationText: listing.locationText,
+    mapUrl: listing.mapUrl,
     genderWanted: listing.genderWanted,
     rentPerMonth: listing.rentPerMonth,
     otherFees,
