@@ -91,7 +91,15 @@ describe('Lucky Wheel (e2e)', () => {
   it('T-LW-03 / LW-01: 20 request song song → đúng 1 vòng 201, còn lại WHEEL_BUSY kèm retryAfterMs', async () => {
     const h = await house4();
     const body = { taskTitle: 'Mua gas', participantIds: h.users.map((u) => u.id), dueAt: due() };
-    const results = await Promise.all(Array.from({ length: 20 }, (_, i) => spin(h.users[i % 4].token, h.houseId, body)));
+    // Vòng đủ dài để cả 20 request (xếp hàng sau khóa advisory) tới khi vòng còn quay, kể cả khi máy chậm.
+    // Với 400ms, request tới muộn hơn mốc revealAt sẽ hợp lệ được 201 và test đỏ thất thường.
+    wheel.durationMs = 60_000;
+    let results: Awaited<ReturnType<typeof spin>>[];
+    try {
+      results = await Promise.all(Array.from({ length: 20 }, (_, i) => spin(h.users[i % 4].token, h.houseId, body)));
+    } finally {
+      wheel.durationMs = 400;
+    }
     const codes = results.map((r) => r.status);
     expect(codes.filter((c) => c === 201)).toHaveLength(1);
     expect(codes.filter((c) => c === 409)).toHaveLength(19);
@@ -105,7 +113,8 @@ describe('Lucky Wheel (e2e)', () => {
     const h = await house4();
     const ids = h.users.map((u) => u.id);
     const first = await spin(h.users[0].token, h.houseId, { taskTitle: 'Mua gas', participantIds: ids, dueAt: due() }).expect(201);
-    await sleep(wheel.durationMs + 600);
+    // Tua tới hết vòng thay vì chờ timer thật: timer trễ khi máy tải nặng.
+    await finish(first.body.spinId);
     const log = await fx.prisma.luckyWheelLog.findUniqueOrThrow({ where: { id: first.body.spinId } });
     expect(log.status).toBe('REVEALED');
 
