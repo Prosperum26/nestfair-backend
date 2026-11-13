@@ -21,7 +21,9 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { CookieOptions, Request, Response } from 'express';
+import { THROTTLE_AUTH } from '../../common/throttle/throttle.config.js';
 import type { Env } from '../../config/env.validation.js';
 import { EventsService } from '../events/events.service.js';
 import {
@@ -61,6 +63,7 @@ export class AuthController {
   ) {}
 
   @Post('register')
+  @Throttle(THROTTLE_AUTH.register)
   @ApiOperation({
     summary: 'Register with email and password',
     description:
@@ -71,7 +74,7 @@ export class AuthController {
       'letter and one digit. No authentication required.',
   })
   @ApiCreatedResponse({ type: AuthResponseDto, description: 'Account created and signed in.' })
-  @ApiErrors(400, [409, 'The email address is already registered. The body has no `code`; the message asks whether the user wants to sign in instead.'])
+  @ApiErrors(400, [409, 'The email address is already registered. The body has no `code`; the message asks whether the user wants to sign in instead.'], [429, 'Too many registrations from this client (5 per minute).'])
   async register(
     @Body() dto: RegisterDto,
     @Res({ passthrough: true }) res: Response,
@@ -80,6 +83,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Throttle(THROTTLE_AUTH.login)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Sign in with email and password',
@@ -91,7 +95,7 @@ export class AuthController {
       'No authentication required.',
   })
   @ApiOkResponse({ type: AuthResponseDto, description: 'Signed in.' })
-  @ApiErrors(400, [401, 'Wrong email or password.'])
+  @ApiErrors(400, [401, 'Wrong email or password.'], [429, 'Too many sign-in attempts from this client (10 per minute).'])
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,
@@ -100,6 +104,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @Throttle(THROTTLE_AUTH.refresh)
   @HttpCode(HttpStatus.OK)
   @ApiCookieAuth()
   @ApiOperation({
@@ -111,7 +116,7 @@ export class AuthController {
       'only the cookie is.',
   })
   @ApiOkResponse({ type: AuthResponseDto, description: 'New access token and rotated refresh cookie.' })
-  @ApiErrors([401, 'The refresh cookie is missing, expired, already used or revoked.'])
+  @ApiErrors([401, 'The refresh cookie is missing, expired, already used or revoked.'], [429, 'Too many refresh calls from this client (30 per minute).'])
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
@@ -146,6 +151,7 @@ export class AuthController {
   }
 
   @Post('change-password')
+  @Throttle(THROTTLE_AUTH.changePassword)
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
