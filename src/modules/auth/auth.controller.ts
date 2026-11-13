@@ -46,6 +46,7 @@ import {
   GoogleStartGuard,
 } from './guards/google-auth.guard.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
+import { TrustedOriginGuard } from './guards/trusted-origin.guard.js';
 import { isGoogleEnabled } from './strategies/google.strategy.js';
 import type { AuthUser } from './strategies/jwt.strategy.js';
 
@@ -105,6 +106,7 @@ export class AuthController {
 
   @Post('refresh')
   @Throttle(THROTTLE_AUTH.refresh)
+  @UseGuards(TrustedOriginGuard)
   @HttpCode(HttpStatus.OK)
   @ApiCookieAuth()
   @ApiOperation({
@@ -116,7 +118,7 @@ export class AuthController {
       'only the cookie is.',
   })
   @ApiOkResponse({ type: AuthResponseDto, description: 'New access token and rotated refresh cookie.' })
-  @ApiErrors([401, 'The refresh cookie is missing, expired, already used or revoked.'], [429, 'Too many refresh calls from this client (30 per minute).'])
+  @ApiErrors([401, 'The refresh cookie is missing, expired, already used or revoked.'], [403, 'Error code `ORIGIN_NOT_ALLOWED`: the request carries an `Origin` header that is not in `CORS_ORIGINS` (cross-site request forgery guard).'], [429, 'Too many refresh calls from this client (30 per minute).'])
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
@@ -130,6 +132,7 @@ export class AuthController {
   }
 
   @Post('logout')
+  @UseGuards(TrustedOriginGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiCookieAuth()
   @ApiOperation({
@@ -140,6 +143,7 @@ export class AuthController {
       '(idempotent). The short-lived access token cannot be revoked and simply expires.',
   })
   @ApiNoContentResponse({ description: 'Signed out.' })
+  @ApiErrors([403, 'Error code `ORIGIN_NOT_ALLOWED`: the `Origin` header is not an allowed web origin; the session is left untouched.'])
   async logout(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
