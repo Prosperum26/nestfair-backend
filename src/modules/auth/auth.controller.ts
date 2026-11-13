@@ -95,7 +95,7 @@ export class AuthController {
       'No authentication required.',
   })
   @ApiOkResponse({ type: AuthResponseDto, description: 'Signed in.' })
-  @ApiErrors(400, [401, 'Wrong email or password.'], [429, 'Too many sign-in attempts from this client (10 per minute).'])
+  @ApiErrors(400, [401, 'Wrong email or password.'], [429, 'Too many sign-in attempts from this client (10 per minute), or error code `LOGIN_LOCKED`: 5 wrong passwords for the same email lock it for 15 minutes (unknown emails too, so the lock reveals nothing).'])
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,

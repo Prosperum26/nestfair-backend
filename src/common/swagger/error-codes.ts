@@ -157,6 +157,7 @@ export const ERROR_CODES: Record<string, readonly [status: number, meaning: stri
   MESSAGE_NOT_FOUND: [404, 'The assistant message does not exist for this user.'],
   REMINDER_NOT_FOUND: [404, 'The reminder does not exist for this user.'],
   NOTIFICATION_NOT_FOUND: [404, 'The notification does not exist for this user.'],
+  LOGIN_LOCKED: [429, 'Too many wrong passwords for this email; sign-in is paused. The body includes `retryAfterSeconds`.'],
   REMINDER_ALREADY_CREATED: [409, 'A reminder for this suggestion was already created.'],
   REMINDER_ALREADY_SENT: [409, 'The reminder was already delivered and can no longer be edited.'],
   REMINDER_NOT_DELETABLE: [403, 'System reminders can be edited but not deleted.'],

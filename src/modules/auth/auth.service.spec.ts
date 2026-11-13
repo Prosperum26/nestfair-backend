@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { Prisma } from '../../generated/prisma/client.js';
 import type { PrismaService } from '../../prisma/prisma.service.js';
 import { AuthService } from './auth.service.js';
+import { LoginLockout } from './login-lockout.js';
 
 const SECRET = 'x'.repeat(64);
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -57,6 +58,7 @@ describe('AuthService', () => {
       prisma as unknown as PrismaService,
       jwt,
       config as never,
+      new LoginLockout(),
     );
   });
 

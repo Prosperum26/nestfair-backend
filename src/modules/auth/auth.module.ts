@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Env } from '../../config/env.validation.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
+import { LoginLockout } from './login-lockout.js';
 import {
   GoogleCallbackGuard,
   GoogleStartGuard,
@@ -29,6 +30,7 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
   controllers: [AuthController],
   providers: [
     AuthService,
+    { provide: LoginLockout, useFactory: () => new LoginLockout() },
     JwtStrategy,
     JwtAuthGuard,
     GoogleStartGuard,

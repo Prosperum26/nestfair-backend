@@ -16,6 +16,7 @@ import { type PublicUser, publicUserSelect } from '../users/public-user.js';
 import type { ChangePasswordDto } from './dto/change-password.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { RegisterDto } from './dto/register.dto.js';
+import { LoginLockout } from './login-lockout.js';
 
 const BCRYPT_COST = 10;
 const INVALID_CREDENTIALS = 'Email hoặc mật khẩu không đúng.';
@@ -55,6 +56,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService<Env, true>,
+    private readonly lockout: LoginLockout,
   ) {}
 
   async register(dto: RegisterDto): Promise<Session> {
@@ -90,6 +92,7 @@ export class AuthService {
   }
 
   async login(dto: LoginDto): Promise<Session> {
+    this.lockout.assertNotLocked(dto.email);
     const found = await this.prisma.user.findUnique({
       where: { email: dto.email },
       select: { ...publicUserSelect, passwordHash: true },
@@ -100,8 +103,10 @@ export class AuthService {
       found?.passwordHash ?? DUMMY_HASH,
     );
     if (!found?.passwordHash || !ok) {
+      this.lockout.recordFailure(dto.email);
       throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
+    this.lockout.reset(dto.email);
 
     const { passwordHash: _, ...user } = found;
     return this.createSession(user, dto.rememberMe ?? true);
