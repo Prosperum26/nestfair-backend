@@ -24,6 +24,9 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
       inject: [ConfigService],
       useFactory: (config: ConfigService<Env, true>) => ({
         secret: config.get('JWT_SECRET', { infer: true }),
+        // Ghim thuật toán: không nhận token ký bằng thuật toán khác (kể cả `none`), áp cho cả HTTP và socket.
+        signOptions: { algorithm: 'HS256' },
+        verifyOptions: { algorithms: ['HS256'] },
       }),
     }),
   ],
