@@ -11,6 +11,9 @@ export function configureApp(app: INestApplication) {
   const config = app.get(ConfigService<Env, true>);
 
   app.setGlobalPrefix('api/v1');
+  const proxyHops = config.get('TRUST_PROXY_HOPS', { infer: true });
+  // Express lấy req.ip từ X-Forwarded-For, bỏ qua đúng số proxy tin cậy tính từ phải sang.
+  if (proxyHops > 0) app.getHttpAdapter().getInstance().set('trust proxy', proxyHops);
   app.use(helmet());
   app.use(cookieParser());
   app.enableCors({

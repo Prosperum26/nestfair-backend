@@ -2,6 +2,8 @@ import { plainToInstance, Type } from 'class-transformer';
 import {
   IsIn,
   IsInt,
+  Max,
+  Min,
   IsOptional,
   IsString,
   MinLength,
@@ -19,6 +21,14 @@ export class Env {
 
   @IsString()
   CORS_ORIGINS = 'http://localhost:5173';
+
+  // Số proxy đứng trước server (Render = 1, Cloudflare + Render = 2). 0 = không tin X-Forwarded-For.
+  // Sai số này thì throttle theo IP hỏng: quá thấp = mọi người chung IP proxy, quá cao = client giả được IP.
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(5)
+  TRUST_PROXY_HOPS: number = 0;
 
   @IsString()
   PUBLIC_WEB_URL = 'http://localhost:5173';

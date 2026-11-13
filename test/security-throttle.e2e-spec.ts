@@ -41,6 +41,8 @@ describe('Giới hạn tần suất (throttle bật)', () => {
     expect(res.body).toMatchObject({ statusCode: 429 });
     expect(res.body.message).toMatch(/quá nhiều/);
     expect(res.headers['retry-after']).toBeDefined();
+    // Không cấu hình TRUST_PROXY_HOPS: header X-Forwarded-For giả không lách được giới hạn.
+    await http().get('/api/v1/auth/config').set('X-Forwarded-For', '203.0.113.9').expect(429);
   });
 
   it('route ghi đè giữ mức riêng: trang tin công khai 60 request/phút', async () => {
