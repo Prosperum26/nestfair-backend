@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import type { ServerOptions } from 'socket.io';
 import type { Env } from '../../config/env.validation.js';
+import { parseOrigins } from '../../config/origins.js';
 
 /** Dùng CORS_ORIGINS cho Socket.IO (FE và BE khác origin khi deploy). */
 export class SocketIoAdapter extends IoAdapter {
@@ -10,10 +11,7 @@ export class SocketIoAdapter extends IoAdapter {
 
   constructor(app: INestApplicationContext) {
     super(app);
-    this.origins = app
-      .get(ConfigService<Env, true>)
-      .get('CORS_ORIGINS', { infer: true })
-      .split(',');
+    this.origins = parseOrigins(app.get(ConfigService<Env, true>).get('CORS_ORIGINS', { infer: true }));
   }
 
   override createIOServer(port: number, options?: ServerOptions) {
