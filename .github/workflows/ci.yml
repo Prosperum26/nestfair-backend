@@ -12,7 +12,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Chỉ hủy lần chạy cũ của PR; push vào dev/main có thể đang deploy (migrate dở thì nguy hiểm).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -29,6 +30,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      # Script dùng trong workflow (tiêu đề PR, đợi deploy) có test riêng bằng node:test.
+      - run: node --test .github/scripts/
       - run: npm run build
 
   e2e:
@@ -64,3 +67,13 @@ jobs:
       - run: npx prisma migrate deploy
       # Runner chỉ có 2 vCPU: giới hạn số file chạy song song để các test nhạy thời gian không hết giờ.
       - run: npm run test:e2e -- --maxWorkers=2
+
+  deploy:
+    name: deploy
+    needs: [check, e2e]
+    # Chỉ deploy khi push (merge) vào dev hoặc main, không deploy từ PR.
+    if: github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main')
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+    secrets: inherit
