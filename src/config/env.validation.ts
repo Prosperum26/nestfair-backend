@@ -30,6 +30,12 @@ export class Env {
   @Max(5)
   TRUST_PROXY_HOPS: number = 0;
 
+  // sameSite của cookie refresh. Để trống = production `none`, máy dev `lax`.
+  // FE và API cùng tên miền (app.x, api.x) thì đặt `lax`: trình duyệt tự chặn CSRF.
+  @IsOptional()
+  @IsIn(['lax', 'strict', 'none'])
+  COOKIE_SAME_SITE?: 'lax' | 'strict' | 'none';
+
   @IsString()
   PUBLIC_WEB_URL = 'http://localhost:5173';
 

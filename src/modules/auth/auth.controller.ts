@@ -47,12 +47,10 @@ import {
 } from './guards/google-auth.guard.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { TrustedOriginGuard } from './guards/trusted-origin.guard.js';
+import { REFRESH_COOKIE, refreshCookieOptions } from './refresh-cookie.js';
 import { isGoogleEnabled } from './strategies/google.strategy.js';
 import type { AuthUser } from './strategies/jwt.strategy.js';
 
-export const REFRESH_COOKIE = 'nf_rt';
-// Cookie chỉ được gửi kèm các route /auth, không đi theo mọi request API.
-const REFRESH_COOKIE_PATH = '/api/v1/auth';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -270,14 +268,9 @@ export class AuthController {
   }
 
   private cookieOptions(): CookieOptions {
-    const production =
-      this.config.get('NODE_ENV', { infer: true }) === 'production';
-    return {
-      httpOnly: true,
-      secure: production,
-      // Production: FE (Vercel) và BE (Render) khác site nên cần sameSite=none + secure.
-      sameSite: production ? 'none' : 'lax',
-      path: REFRESH_COOKIE_PATH,
-    };
+    return refreshCookieOptions(
+      this.config.get('NODE_ENV', { infer: true }),
+      this.config.get('COOKIE_SAME_SITE', { infer: true }),
+    );
   }
 }
