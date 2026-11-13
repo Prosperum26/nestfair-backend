@@ -1,4 +1,4 @@
-import { Controller, Get, Header, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Header, Param } from '@nestjs/common';
 import {
   ApiExtraModels,
   ApiOkResponse,
@@ -7,7 +7,7 @@ import {
   ApiTags,
   getSchemaPath,
 } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import { ApiErrors } from '../../common/swagger/api-errors.decorator.js';
 import { PublicListingClosedDto, type PublicListingDto, PublicListingOpenDto } from './dto/public-listing.dto.js';
 import { PublicListingService } from './public-listing.service.js';
@@ -15,7 +15,6 @@ import { PublicListingService } from './public-listing.service.js';
 /** Công khai, không JWT. Giới hạn 60 lần/phút/IP; mỗi lần đọc xong là hết, không ghi gì. */
 @ApiTags('public-listings')
 @ApiExtraModels(PublicListingOpenDto, PublicListingClosedDto)
-@UseGuards(ThrottlerGuard)
 @Throttle({ default: { limit: 60, ttl: 60_000 } })
 @Controller('public/listings')
 export class PublicListingController {

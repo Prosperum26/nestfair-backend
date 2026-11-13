@@ -12,7 +12,8 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
+import { THROTTLE_STRICT } from '../../common/throttle/throttle.config.js';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -47,7 +48,8 @@ const HARD_LIMIT_BYTES = 10 * 1024 * 1024;
   [429, 'Too many requests (20 per minute per client).'],
 )
 @ApiParam({ name: 'assignmentId', format: 'uuid', description: 'Id of the chore assignment. The house is derived from the assignment.' })
-@UseGuards(JwtAuthGuard, ThrottlerGuard)
+@UseGuards(JwtAuthGuard)
+@Throttle(THROTTLE_STRICT)
 @Controller('assignments/:assignmentId')
 export class AssignmentActionsController {
   constructor(

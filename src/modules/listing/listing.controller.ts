@@ -23,7 +23,8 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
+import { THROTTLE_STRICT } from '../../common/throttle/throttle.config.js';
 import { ApiErrors } from '../../common/swagger/api-errors.decorator.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
@@ -117,7 +118,8 @@ export class ListingController {
 
   @Post('photos')
   @HouseRoles('ADMIN')
-  @UseGuards(HouseRolesGuard, ThrottlerGuard)
+  @UseGuards(HouseRolesGuard)
+  @Throttle(THROTTLE_STRICT)
   @UseInterceptors(FileInterceptor('photo', { limits: { fileSize: HARD_LIMIT_BYTES } }))
   @ApiConsumes('multipart/form-data')
   @ApiBody({

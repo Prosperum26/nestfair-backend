@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Env } from '../../config/env.validation.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
+import { LoginLockout } from './login-lockout.js';
 import {
   GoogleCallbackGuard,
   GoogleStartGuard,
@@ -23,12 +24,16 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
       inject: [ConfigService],
       useFactory: (config: ConfigService<Env, true>) => ({
         secret: config.get('JWT_SECRET', { infer: true }),
+        // Ghim thuật toán: không nhận token ký bằng thuật toán khác (kể cả `none`), áp cho cả HTTP và socket.
+        signOptions: { algorithm: 'HS256' },
+        verifyOptions: { algorithms: ['HS256'] },
       }),
     }),
   ],
   controllers: [AuthController],
   providers: [
     AuthService,
+    { provide: LoginLockout, useFactory: () => new LoginLockout() },
     JwtStrategy,
     JwtAuthGuard,
     GoogleStartGuard,

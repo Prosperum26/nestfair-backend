@@ -4,6 +4,7 @@ import bcrypt from 'bcrypt';
 import { createHash } from 'node:crypto';
 import type { PrismaService } from '../../prisma/prisma.service.js';
 import { AuthService } from './auth.service.js';
+import { LoginLockout } from './login-lockout.js';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const userId = '11111111-1111-1111-1111-111111111111';
@@ -32,7 +33,7 @@ describe('AuthService.changePassword', () => {
     };
     prisma.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prisma));
     const config = { get: () => 15 } as unknown as ConfigService;
-    service = new AuthService(prisma as unknown as PrismaService, new JwtService({ secret: 'x'.repeat(64) }), config as never);
+    service = new AuthService(prisma as unknown as PrismaService, new JwtService({ secret: 'x'.repeat(64) }), config as never, new LoginLockout());
   });
 
   const dto = { currentPassword: 'MatKhauCu1', newPassword: 'MatKhauMoi2' };

@@ -21,7 +21,10 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { CookieOptions, Request, Response } from 'express';
+import { THROTTLE_AUTH } from '../../common/throttle/throttle.config.js';
+import { securityLog } from '../../common/security-log.js';
 import type { Env } from '../../config/env.validation.js';
 import { EventsService } from '../events/events.service.js';
 import {
@@ -44,12 +47,11 @@ import {
   GoogleStartGuard,
 } from './guards/google-auth.guard.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
+import { TrustedOriginGuard } from './guards/trusted-origin.guard.js';
+import { REFRESH_COOKIE, refreshCookieOptions } from './refresh-cookie.js';
 import { isGoogleEnabled } from './strategies/google.strategy.js';
 import type { AuthUser } from './strategies/jwt.strategy.js';
 
-export const REFRESH_COOKIE = 'nf_rt';
-// Cookie chỉ được gửi kèm các route /auth, không đi theo mọi request API.
-const REFRESH_COOKIE_PATH = '/api/v1/auth';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -61,6 +63,7 @@ export class AuthController {
   ) {}
 
   @Post('register')
+  @Throttle(THROTTLE_AUTH.register)
   @ApiOperation({
     summary: 'Register with email and password',
     description:
@@ -71,7 +74,7 @@ export class AuthController {
       'letter and one digit. No authentication required.',
   })
   @ApiCreatedResponse({ type: AuthResponseDto, description: 'Account created and signed in.' })
-  @ApiErrors(400, [409, 'The email address is already registered. The body has no `code`; the message asks whether the user wants to sign in instead.'])
+  @ApiErrors(400, [409, 'The email address is already registered. The body has no `code`; the message asks whether the user wants to sign in instead.'], [429, 'Too many registrations from this client (5 per minute).'])
   async register(
     @Body() dto: RegisterDto,
     @Res({ passthrough: true }) res: Response,
@@ -80,6 +83,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Throttle(THROTTLE_AUTH.login)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Sign in with email and password',
@@ -91,7 +95,7 @@ export class AuthController {
       'No authentication required.',
   })
   @ApiOkResponse({ type: AuthResponseDto, description: 'Signed in.' })
-  @ApiErrors(400, [401, 'Wrong email or password.'])
+  @ApiErrors(400, [401, 'Wrong email or password.'], [429, 'Too many sign-in attempts from this client (10 per minute), or error code `LOGIN_LOCKED`: 5 wrong passwords for the same email lock it for 15 minutes (unknown emails too, so the lock reveals nothing).'])
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,
@@ -100,6 +104,8 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @Throttle(THROTTLE_AUTH.refresh)
+  @UseGuards(TrustedOriginGuard)
   @HttpCode(HttpStatus.OK)
   @ApiCookieAuth()
   @ApiOperation({
@@ -111,7 +117,7 @@ export class AuthController {
       'only the cookie is.',
   })
   @ApiOkResponse({ type: AuthResponseDto, description: 'New access token and rotated refresh cookie.' })
-  @ApiErrors([401, 'The refresh cookie is missing, expired, already used or revoked.'])
+  @ApiErrors([401, 'The refresh cookie is missing, expired, already used or revoked.'], [403, 'Error code `ORIGIN_NOT_ALLOWED`: the request carries an `Origin` header that is not in `CORS_ORIGINS` (cross-site request forgery guard).'], [429, 'Too many refresh calls from this client (30 per minute).'])
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
@@ -120,11 +126,16 @@ export class AuthController {
       return this.respond(res, await this.auth.refresh(this.readCookie(req)));
     } catch (error) {
       res.clearCookie(REFRESH_COOKIE, this.cookieOptions());
+      // Cookie đã dùng hoặc bị thu hồi mà vẫn gửi lại có thể là dấu hiệu token bị đánh cắp.
+      if (error instanceof UnauthorizedException && this.readCookie(req)) {
+        securityLog.warn(`Làm mới phiên bị từ chối (cookie không hợp lệ) từ IP ${req.ip}`);
+      }
       throw error;
     }
   }
 
   @Post('logout')
+  @UseGuards(TrustedOriginGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiCookieAuth()
   @ApiOperation({
@@ -135,6 +146,7 @@ export class AuthController {
       '(idempotent). The short-lived access token cannot be revoked and simply expires.',
   })
   @ApiNoContentResponse({ description: 'Signed out.' })
+  @ApiErrors([403, 'Error code `ORIGIN_NOT_ALLOWED`: the `Origin` header is not an allowed web origin; the session is left untouched.'])
   async logout(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
@@ -146,6 +158,7 @@ export class AuthController {
   }
 
   @Post('change-password')
+  @Throttle(THROTTLE_AUTH.changePassword)
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -260,14 +273,9 @@ export class AuthController {
   }
 
   private cookieOptions(): CookieOptions {
-    const production =
-      this.config.get('NODE_ENV', { infer: true }) === 'production';
-    return {
-      httpOnly: true,
-      secure: production,
-      // Production: FE (Vercel) và BE (Render) khác site nên cần sameSite=none + secure.
-      sameSite: production ? 'none' : 'lax',
-      path: REFRESH_COOKIE_PATH,
-    };
+    return refreshCookieOptions(
+      this.config.get('NODE_ENV', { infer: true }),
+      this.config.get('COOKIE_SAME_SITE', { infer: true }),
+    );
   }
 }

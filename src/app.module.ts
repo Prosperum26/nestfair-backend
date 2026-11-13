@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { AppThrottlerGuard } from './common/throttle/app-throttler.guard.js';
+import { throttlerOptions } from './common/throttle/throttle.config.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { AssistantModule } from './modules/assistant/assistant.module.js';
@@ -45,14 +48,11 @@ import { PrismaModule } from './prisma/prisma.module.js';
     EventsModule,
     ActivityModule,
     ScheduleModule.forRoot(),
-    // Giới hạn tần suất cho check-in / duyệt / khiếu nại (ThrottlerGuard gắn riêng trên các route đó). Bỏ qua khi test.
-    ThrottlerModule.forRoot({
-      throttlers: [{ name: 'default', ttl: 60_000, limit: 20 }],
-      skipIf: () => process.env.NODE_ENV === 'test',
-    }),
+    // Giới hạn tần suất toàn cục theo IP (AppThrottlerGuard bên dưới); route nhạy cảm ghi đè bằng @Throttle. Bỏ qua khi test.
+    ThrottlerModule.forRoot(throttlerOptions),
     SchedulerModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, { provide: APP_GUARD, useClass: AppThrottlerGuard }],
 })
 export class AppModule {}

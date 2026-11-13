@@ -1,0 +1,29 @@
+{
+  "_note": "Bảng test dùng chung cho isGoogleMapsUrl. Giữ GIỐNG HỆT giữa nestfair-backend (src/modules/listing/algorithms/) và nestfair-frontend (src/features/listing/); sửa một bên thì chép sang bên kia.",
+  "valid": [
+    "https://maps.app.goo.gl/AbCdEf123",
+    "https://maps.google.com/?q=10.87,106.80",
+    "https://www.google.com/maps/search/?api=1&query=10.869,106.802",
+    "https://google.com/maps/place/Dĩ+An",
+    "https://www.google.com.vn/maps/@10.87,106.8,15z",
+    "https://google.com.vn/maps",
+    "https://goo.gl/maps/xyz",
+    "https://WWW.GOOGLE.COM/maps/search/?api=1&query=1,2"
+  ],
+  "invalid": [
+    "",
+    "http://maps.app.goo.gl/AbCdEf123",
+    "javascript:alert(1)",
+    "https://google.com.evil.com/maps",
+    "https://evil.com/?u=https://maps.google.com",
+    "https://www.google.com/search?q=maps",
+    "https://www.google.com/mapsx",
+    "https://goo.gl/abc",
+    "https://user:pass@maps.google.com/",
+    "https://maps.google.com:8443/",
+    "https://maps.google.com.evil.com/",
+    "data:text/html,<script>alert(1)</script>",
+    "maps.app.goo.gl/AbCdEf123",
+    "https://maps.app.goo.gl/{LONG}"
+  ]
+}
