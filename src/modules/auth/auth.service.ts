@@ -17,6 +17,7 @@ import type { ChangePasswordDto } from './dto/change-password.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { RegisterDto } from './dto/register.dto.js';
 import { LoginLockout } from './login-lockout.js';
+import { maskEmail, securityLog } from '../../common/security-log.js';
 
 const BCRYPT_COST = 10;
 const INVALID_CREDENTIALS = 'Email hoặc mật khẩu không đúng.';
@@ -103,7 +104,8 @@ export class AuthService {
       found?.passwordHash ?? DUMMY_HASH,
     );
     if (!found?.passwordHash || !ok) {
-      this.lockout.recordFailure(dto.email);
+      const locked = this.lockout.recordFailure(dto.email);
+      securityLog.warn(`Đăng nhập sai: ${maskEmail(dto.email)}${locked ? ' (đã khóa 15 phút)' : ''}`);
       throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
     this.lockout.reset(dto.email);

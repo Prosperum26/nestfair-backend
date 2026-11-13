@@ -24,6 +24,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import type { CookieOptions, Request, Response } from 'express';
 import { THROTTLE_AUTH } from '../../common/throttle/throttle.config.js';
+import { securityLog } from '../../common/security-log.js';
 import type { Env } from '../../config/env.validation.js';
 import { EventsService } from '../events/events.service.js';
 import {
@@ -125,6 +126,10 @@ export class AuthController {
       return this.respond(res, await this.auth.refresh(this.readCookie(req)));
     } catch (error) {
       res.clearCookie(REFRESH_COOKIE, this.cookieOptions());
+      // Cookie đã dùng hoặc bị thu hồi mà vẫn gửi lại có thể là dấu hiệu token bị đánh cắp.
+      if (error instanceof UnauthorizedException && this.readCookie(req)) {
+        securityLog.warn(`Làm mới phiên bị từ chối (cookie không hợp lệ) từ IP ${req.ip}`);
+      }
       throw error;
     }
   }

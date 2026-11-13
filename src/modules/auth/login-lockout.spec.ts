@@ -61,3 +61,11 @@ describe('LoginLockout', () => {
     expect(l.size).toBeLessThanOrEqual(3);
   });
 });
+
+describe('LoginLockout.recordFailure', () => {
+  it('trả true đúng lần làm khóa tài khoản (để ghi log bảo mật)', () => {
+    const l = new LoginLockout();
+    const results = Array.from({ length: LOCKOUT.maxFailures }, () => l.recordFailure('a@x.vn', 0));
+    expect(results).toEqual([...Array(LOCKOUT.maxFailures - 1).fill(false), true]);
+  });
+});

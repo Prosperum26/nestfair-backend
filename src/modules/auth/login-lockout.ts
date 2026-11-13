@@ -45,7 +45,8 @@ export class LoginLockout {
     );
   }
 
-  recordFailure(email: string, now = Date.now()): void {
+  /** Ghi một lần sai; trả `true` đúng lần làm email bị khóa. */
+  recordFailure(email: string, now = Date.now()): boolean {
     let entry = this.entries.get(email);
     const stale = entry && (entry.lockedUntil > 0 ? entry.lockedUntil <= now : now - entry.firstAt > LOCKOUT.windowMs);
     if (!entry || stale) {
@@ -55,7 +56,9 @@ export class LoginLockout {
       this.entries.set(email, entry);
     }
     entry.failures += 1;
-    if (entry.failures >= LOCKOUT.maxFailures) entry.lockedUntil = now + LOCKOUT.lockMs;
+    if (entry.failures < LOCKOUT.maxFailures) return false;
+    entry.lockedUntil = now + LOCKOUT.lockMs;
+    return true;
   }
 
   reset(email: string): void {
