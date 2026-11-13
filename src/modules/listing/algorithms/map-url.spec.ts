@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { isGoogleMapsUrl, MAP_URL_MAX } from './map-url.js';
 
@@ -42,5 +43,22 @@ describe('isGoogleMapsUrl', () => {
     expect(MAP_URL_MAX).toBe(500);
     const long = 'https://www.google.com/maps?q=' + 'a'.repeat(MAP_URL_MAX);
     expect(isGoogleMapsUrl(long)).toBe(false);
+  });
+});
+
+/** Bảng vector dùng chung với frontend (src/features/listing/map-url.vectors.json): hai bên phải trả cùng kết quả. */
+describe('isGoogleMapsUrl theo bảng vector dùng chung', () => {
+  const vectors = JSON.parse(readFileSync(new URL('./map-url.vectors.json', import.meta.url), 'utf8')) as {
+    valid: string[];
+    invalid: string[];
+  };
+  const expand = (v: string) => v.replace('{LONG}', 'a'.repeat(MAP_URL_MAX));
+
+  it.each(vectors.valid)('nhận %s', (v) => {
+    expect(isGoogleMapsUrl(expand(v))).toBe(true);
+  });
+
+  it.each(vectors.invalid)('từ chối %s', (v) => {
+    expect(isGoogleMapsUrl(expand(v))).toBe(false);
   });
 });
