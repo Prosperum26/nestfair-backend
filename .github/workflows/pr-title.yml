@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-      - run: node --test .github/scripts/
+      - run: node --test .github/scripts/pr-title.node-test.mjs
       # Tiêu đề đi qua biến môi trường, không nội suy thẳng vào lệnh shell (chống chèn lệnh).
       - run: node .github/scripts/pr-title.mjs
         env:
