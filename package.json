@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "NestFair API — NestJS + Prisma + PostgreSQL",
   "private": true,
+  "engines": {
+    "node": ">=26 <27"
+  },
   "license": "UNLICENSED",
   "type": "module",
   "repository": {
