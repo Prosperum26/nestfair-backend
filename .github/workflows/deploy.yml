@@ -81,8 +81,8 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           mkdir -p backup
-          # pg_dump phải cùng hoặc mới hơn bản Postgres của Neon (17): dùng image postgres:17.
-          docker run --rm -e DATABASE_URL -v "$PWD/backup:/backup" postgres:17 \
+          # pg_dump phải cùng hoặc mới hơn bản Postgres của Neon (18): dùng image postgres:18.
+          docker run --rm -e DATABASE_URL -v "$PWD/backup:/backup" postgres:18 \
             sh -c 'pg_dump --format=custom --no-owner --file=/backup/prod.dump "$DATABASE_URL"'
           test -s backup/prod.dump
           ls -lh backup/prod.dump
