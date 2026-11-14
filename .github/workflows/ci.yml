@@ -1,0 +1,85 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Chỉ hủy lần chạy cũ của PR; push vào dev/main có thể đang deploy (migrate dở thì nguy hiểm).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: typecheck · lint · unit · build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # postinstall chạy `prisma generate`, chỉ cần một URL hợp lệ, không kết nối DB.
+      - run: npm ci
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      # Script dùng trong workflow (tiêu đề PR, đợi deploy) có test riêng bằng node:test.
+      - run: node --test .github/scripts/
+      - run: npm run build
+
+  e2e:
+    name: e2e (Postgres 17)
+    runs-on: ubuntu-24.04
+    # T-SW-09 (1.000 bước ngẫu nhiên) chạy lâu; chỉnh lại theo thời gian đo được ở các lần chạy đầu.
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: nestfair
+          POSTGRES_PASSWORD: nestfair
+          POSTGRES_DB: nestfair_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nestfair -d nestfair_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://nestfair:nestfair@localhost:5432/nestfair_ci
+      # Chỉ dùng trong CI, không phải secret thật.
+      JWT_SECRET: ci-only-jwt-secret-not-used-anywhere-else-0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # postinstall chạy `prisma generate`, chỉ cần một URL hợp lệ, không kết nối DB.
+      - run: npm ci
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
+      - run: npx prisma migrate deploy
+      # Runner chỉ có 2 vCPU: giới hạn số file chạy song song để các test nhạy thời gian không hết giờ.
+      - run: npm run test:e2e -- --maxWorkers=2
+
+  deploy:
+    name: deploy
+    needs: [check, e2e]
+    # Chỉ deploy khi push (merge) vào dev hoặc main, không deploy từ PR.
+    if: github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main')
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+    secrets: inherit

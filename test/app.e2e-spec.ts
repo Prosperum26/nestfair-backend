@@ -26,6 +26,13 @@ describe('Health (e2e)', () => {
       .expect({ status: 'ok', db: 'up' });
   });
 
+  it('GET /api/v1/health/live: không cần đăng nhập, không chạm DB, trả commit', () => {
+    return request(app.getHttpServer())
+      .get('/api/v1/health/live')
+      .expect(200)
+      .expect({ status: 'ok', commit: 'local' });
+  });
+
   afterAll(async () => {
     await app.close();
   });

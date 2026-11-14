@@ -1,0 +1,40 @@
+name: seed-dev
+
+# Nạp lại dữ liệu demo (Nhà 12A…) cho môi trường dev, chạy tay trước buổi demo.
+# Chỉ có Environment `dev`: mật khẩu seed nằm công khai trong mã nguồn nên KHÔNG BAO GIỜ seed vào prod.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Gõ "seed dev" để xác nhận (xóa và nạp lại dữ liệu demo)'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    if: inputs.confirm == 'seed dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # postinstall chạy `prisma generate`, chỉ cần một URL hợp lệ, không kết nối DB.
+      - run: npm ci
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
+      - name: Migrate rồi seed
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          npx prisma migrate deploy
+          npm run seed

@@ -1,6 +1,8 @@
 import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
-import { validateEnv } from './env.validation.js';
+import { getMetadataStorage } from 'class-validator';
+import { readFileSync } from 'node:fs';
+import { Env, validateEnv } from './env.validation.js';
 
 const base = {
   DATABASE_URL: 'postgresql://u:p@localhost:5433/db',
@@ -22,5 +24,27 @@ describe('validateEnv: Gemini (OCR hóa đơn)', () => {
     const env = validateEnv(base);
     expect(env.GEMINI_API_KEY).toBeUndefined();
     expect(env.GEMINI_MODEL).toBeUndefined();
+  });
+});
+
+describe('.env.example đồng bộ với Env', () => {
+  // Biến khai báo trong Env (theo metadata class-validator), so với biến có trong .env.example
+  // (kể cả dòng đã comment kiểu `# TÊN=giá trị`, vì biến tùy chọn được ghi dưới dạng gợi ý).
+  const declared = [
+    ...new Set(
+      getMetadataStorage()
+        .getTargetValidationMetadatas(Env, '', false, false)
+        .map((m) => m.propertyName),
+    ),
+  ];
+  const example = readFileSync(new URL('../../.env.example', import.meta.url), 'utf8');
+  const documented = new Set([...example.matchAll(/^#?\s*([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]));
+
+  it('đọc được danh sách biến từ Env', () => {
+    expect(declared).toEqual(expect.arrayContaining(['DATABASE_URL', 'JWT_SECRET', 'TRUST_PROXY_HOPS']));
+  });
+
+  it('mọi biến của Env đều có trong .env.example', () => {
+    expect(declared.filter((k) => !documented.has(k))).toEqual([]);
   });
 });

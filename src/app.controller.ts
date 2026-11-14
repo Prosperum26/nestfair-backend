@@ -21,4 +21,21 @@ export class AppController {
   health() {
     return this.appService.health();
   }
+
+  @Get('live')
+  @ApiOperation({
+    summary: 'Liveness check',
+    description:
+      'Cheap liveness probe for uptime monitors and the hosting platform: answers without touching the database, so a ' +
+      'monitor calling it every few minutes does not keep the serverless database awake. `commit` is the first 7 ' +
+      'characters of the deployed git commit (`local` outside the hosting platform), which lets deploy workflows wait ' +
+      'until the new version is live. No authentication required.',
+  })
+  @ApiOkResponse({
+    description: 'The server process is up.',
+    schema: { type: 'object', properties: { status: { type: 'string', example: 'ok' }, commit: { type: 'string', example: '7c92450' } } },
+  })
+  live() {
+    return this.appService.live();
+  }
 }
