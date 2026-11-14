@@ -27,7 +27,8 @@ const UNSUPPORTED = 'Chỉ nhận ảnh JPG, PNG hoặc WEBP.';
  */
 export function validateImageFile(file: UploadedImage | undefined): asserts file is UploadedImage {
   if (!file) throw coded(HttpStatus.BAD_REQUEST, 'PROOF_REQUIRED', 'Hãy chọn ảnh minh chứng.');
-  const matches = SIGNATURES[file.mimetype];
+  // hasOwn: mimetype do client gửi, không để `constructor`/`__proto__` lấy thuộc tính từ prototype.
+  const matches = Object.hasOwn(SIGNATURES, file.mimetype) ? SIGNATURES[file.mimetype] : undefined;
   if (!matches) throw coded(HttpStatus.UNSUPPORTED_MEDIA_TYPE, 'UNSUPPORTED_IMAGE', UNSUPPORTED);
   if (file.size > MAX_IMAGE_BYTES) throw coded(HttpStatus.PAYLOAD_TOO_LARGE, 'IMAGE_TOO_LARGE', 'Ảnh tối đa 5MB.');
   if (!matches(file.buffer)) throw coded(HttpStatus.UNSUPPORTED_MEDIA_TYPE, 'UNSUPPORTED_IMAGE', UNSUPPORTED);

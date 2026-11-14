@@ -29,6 +29,12 @@ describe('validateImageFile', () => {
     expect(() => validateImageFile(file('image/webp', WEBP))).not.toThrow();
   });
 
+  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])('mimetype trùng tên thuộc tính của Object (%s) → 415', (mimetype) => {
+    const r = fail(() => validateImageFile(file(mimetype, PNG)));
+    expect(r.status).toBe(415);
+    expect(r.body).toMatchObject({ code: 'UNSUPPORTED_IMAGE' });
+  });
+
   it('không có file → 400 PROOF_REQUIRED', () => {
     const r = fail(() => validateImageFile(undefined));
     expect(r.status).toBe(400);
