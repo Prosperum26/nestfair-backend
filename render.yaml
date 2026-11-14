@@ -1,0 +1,74 @@
+# Render Blueprint: tạo 2 web service (dev, prod) bằng một lần "New → Blueprint" trên Render Dashboard.
+# Deploy do GitHub Actions điều khiển (migrate trước, rồi gọi deploy hook theo đúng commit), nên tắt auto-deploy.
+# Biến có `sync: false` sẽ được hỏi khi tạo Blueprint: nhập tay, không commit giá trị thật.
+# JWT_SECRET cần ≥ 64 ký tự và khác nhau mỗi môi trường (generateValue của Render chỉ sinh 44 ký tự nên không dùng).
+services:
+  - type: web
+    name: nestfair-api-dev
+    runtime: node
+    plan: free
+    region: singapore
+    branch: dev
+    autoDeployTrigger: 'off'
+    # Cần devDependencies (prisma CLI, nest CLI); postinstall chạy `prisma generate`.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /api/v1/health/live
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: '26'
+      # Chỉ Render đứng trước. Khi đặt sau Cloudflare (có tên miền) đổi thành 2.
+      - key: TRUST_PROXY_HOPS
+        value: '1'
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: PUBLIC_WEB_URL
+        sync: false
+      - key: PUBLIC_API_URL
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        sync: false
+
+  - type: web
+    name: nestfair-api-prod
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    autoDeployTrigger: 'off'
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /api/v1/health/live
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: '26'
+      - key: TRUST_PROXY_HOPS
+        value: '1'
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: PUBLIC_WEB_URL
+        sync: false
+      - key: PUBLIC_API_URL
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        sync: false

@@ -1,2 +1,12 @@
 node_modules
 .env
+dist
+coverage
+src/generated
+*.tsbuildinfo
+PROMPTS.md
+
+.agents
+.claude
+.windsurf
+docs/openapi.json

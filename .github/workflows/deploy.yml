@@ -1,0 +1,155 @@
+name: deploy
+
+# Gọi từ ci.yml sau khi check + e2e xanh (push vào dev hoặc main). Không chạy độc lập để không deploy bản đỏ.
+# Cấu hình theo GitHub Environment (`dev` / `prod`):
+#   secrets: DATABASE_URL (Neon, chuỗi direct), RENDER_DEPLOY_HOOK, CROSS_REPO_TOKEN (tùy chọn), DISCORD_WEBHOOK_URL (tùy chọn)
+#   vars:    API_URL (vd. https://nestfair-api-dev.onrender.com)
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [dev, prod]
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # Không hủy lần deploy đang chạy: một migration dở dang tệ hơn chờ thêm vài phút.
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.API_URL }}/api/docs
+    env:
+      API_URL: ${{ vars.API_URL }}
+      SHA: ${{ github.sha }}
+    steps:
+      - name: Kiểm cấu hình môi trường
+        id: cfg
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          missing=""
+          for name in API_URL DATABASE_URL RENDER_DEPLOY_HOOK; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            # Chưa thiết lập môi trường (lần đầu): bỏ qua deploy, không làm đỏ pipeline.
+            echo "::warning::Bỏ qua deploy ${{ inputs.environment }}: thiếu${missing} trong Environment. Xem docs/DEPLOY.md."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.cfg.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: steps.cfg.outputs.ready == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # postinstall chạy `prisma generate`, chỉ cần một URL hợp lệ, không kết nối DB.
+      - if: steps.cfg.outputs.ready == 'true'
+        run: npm ci
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
+
+      - name: Ghi lại commit đang chạy (để rollback)
+        if: steps.cfg.outputs.ready == 'true'
+        id: before
+        run: |
+          prev=$(curl -fsS --max-time 90 "$API_URL/api/v1/health/live" | jq -r '.commit // empty' || true)
+          echo "commit=${prev}" >> "$GITHUB_OUTPUT"
+          echo "Đang chạy: ${prev:-không rõ}"
+
+      - name: Sao lưu DB trước khi migrate (prod)
+        if: steps.cfg.outputs.ready == 'true' && inputs.environment == 'prod'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          mkdir -p backup
+          # pg_dump phải cùng hoặc mới hơn bản Postgres của Neon (17): dùng image postgres:17.
+          docker run --rm -e DATABASE_URL -v "$PWD/backup:/backup" postgres:17 \
+            sh -c 'pg_dump --format=custom --no-owner --file=/backup/prod.dump "$DATABASE_URL"'
+          test -s backup/prod.dump
+          ls -lh backup/prod.dump
+      - if: steps.cfg.outputs.ready == 'true' && inputs.environment == 'prod'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: prod-db-${{ github.sha }}
+          path: backup/prod.dump
+          retention-days: 30
+
+      - name: Migrate
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npx prisma migrate deploy
+
+      - name: Deploy lên Render (đúng commit này)
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        # Deploy hook đã có ?key=...; thêm ref để Render build đúng commit, không phải đầu nhánh.
+        run: curl -fsS -X POST "${RENDER_DEPLOY_HOOK}&ref=${SHA}" > /dev/null
+
+      - name: Đợi bản mới chạy và DB lên
+        if: steps.cfg.outputs.ready == 'true'
+        id: wait
+        run: COMMIT="$SHA" TIMEOUT_SECONDS=900 node .github/scripts/wait-for-deploy.mjs
+
+      - name: Smoke test (chỉ đọc)
+        if: steps.cfg.outputs.ready == 'true'
+        id: smoke
+        run: |
+          set -e
+          test "$(curl -fsS "$API_URL/api/v1/auth/config" | jq -r 'has("googleEnabled")')" = true
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$API_URL/api/v1/public/listings/khong-ton-tai")
+          test "$code" = 404
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$API_URL/api/v1/auth/me")
+          test "$code" = 401
+          echo "Smoke test xanh."
+
+      - name: Rollback về commit trước
+        if: steps.cfg.outputs.ready == 'true' && failure() && steps.before.outputs.commit != '' && steps.before.outputs.commit != 'local'
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          PREV: ${{ steps.before.outputs.commit }}
+        run: |
+          echo "::warning::Deploy $SHA lỗi, quay về $PREV. DB không tự rollback; prod có bản dump trong artifact."
+          curl -fsS -X POST "${RENDER_DEPLOY_HOOK}&ref=${PREV}" > /dev/null
+          COMMIT="$PREV" TIMEOUT_SECONDS=900 node .github/scripts/wait-for-deploy.mjs
+
+      - name: Báo frontend (verify sau khi backend đổi)
+        if: steps.cfg.outputs.ready == 'true' && success()
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "Chưa có CROSS_REPO_TOKEN, bỏ qua."; exit 0; fi
+          gh api "repos/${{ github.repository_owner }}/nestfair-frontend/dispatches" \
+            -f event_type=backend-deployed -F "client_payload[environment]=${{ inputs.environment }}" \
+            -F "client_payload[sha]=$SHA"
+
+      - name: Thông báo Discord
+        if: steps.cfg.outputs.ready == 'true' && always()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then exit 0; fi
+          msg="Backend ${{ inputs.environment }}: ${STATUS} · ${SHA:0:7} · ${RUN_URL}"
+          jq -n --arg content "$msg" '{content: $content}' | curl -fsS -H 'content-type: application/json' -d @- "$DISCORD_WEBHOOK_URL"

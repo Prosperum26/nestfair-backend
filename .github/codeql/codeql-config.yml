@@ -1,0 +1,5 @@
+# Quét mã chạy thật. File test dùng chuỗi URL giả và đọc cây thư mục nên hay bị báo nhầm
+# (js/incomplete-url-substring-sanitization, js/file-system-race), không phải lỗ hổng.
+paths-ignore:
+  - '**/*.spec.ts'
+  - test/**
