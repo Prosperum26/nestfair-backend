@@ -42,7 +42,10 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      # postinstall chạy `prisma generate`, chỉ cần một URL hợp lệ, không kết nối DB.
       - run: npm ci
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
 
       - name: Kiểm cấu hình môi trường
         env:

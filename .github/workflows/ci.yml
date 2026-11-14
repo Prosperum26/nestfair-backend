@@ -26,7 +26,10 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      # postinstall chạy `prisma generate`, chỉ cần một URL hợp lệ, không kết nối DB.
       - run: npm ci
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
@@ -63,7 +66,10 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      # postinstall chạy `prisma generate`, chỉ cần một URL hợp lệ, không kết nối DB.
       - run: npm ci
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
       - run: npx prisma migrate deploy
       # Runner chỉ có 2 vCPU: giới hạn số file chạy song song để các test nhạy thời gian không hết giờ.
       - run: npm run test:e2e -- --maxWorkers=2

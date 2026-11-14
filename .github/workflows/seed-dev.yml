@@ -28,7 +28,10 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      # postinstall chạy `prisma generate`, chỉ cần một URL hợp lệ, không kết nối DB.
       - run: npm ci
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
       - name: Migrate rồi seed
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
