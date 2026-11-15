@@ -1,58 +1,175 @@
 # NestFair API
 
-Backend của NestFair (đồ án MSIS207, UIT): NestJS 12 (ESM) + Prisma 7 + PostgreSQL 17.
+Backend của **NestFair**, web-app quản lý ở ghép cho sinh viên. Đồ án cuối kỳ môn MSIS207 (Phát triển ứng dụng web, UIT), nhóm 2 người: Hưng và Thiện.
 
-## Chạy lần đầu
+NestFair giúp một nhà trọ chia việc nhà công bằng, theo dõi chi tiêu chung và tìm thêm người ở ghép. Repo này là API (REST + Socket.IO); giao diện nằm ở repo [nestfair-frontend](https://github.com/Prosperum26/nestfair-frontend).
 
-Cần Node 22+ và Docker.
+## Tính năng
+
+1. **Việc nhà:** lịch xoay vòng công bằng (rào 3 tuần), Shuffle, Lucky Wheel, check-in bằng ảnh và bạn cùng phòng duyệt chéo; đổi ca, nhờ trực dùm, làm bù hoặc tặng quà, Chợ ca.
+2. **Chi tiêu:** chia tiền (EQUAL / CUSTOM / EXACT / ITEMIZED), Min Cash Flow rút gọn nợ, báo chuyển và xác nhận thanh toán, VietQR.
+3. **Trợ lý AI phòng trọ:** chat riêng tư (Gemini), gợi ý xử lý sự cố đời sống, tạo nhắc nhở.
+4. **OCR hóa đơn:** chụp hóa đơn, Gemini Vision trả bản nháp khoản chi, người dùng xác nhận mới lưu.
+5. **Tìm người ở ghép:** tin đăng, trang công khai `/r/:slug`, poster kèm QR.
+
+Ngoài phạm vi: tách thuế VAT (OCR chỉ lấy tổng thực trả), thanh toán thật, chat giữa thành viên, kiểm duyệt link/QR, bảng xếp hạng / huy hiệu / đổi thưởng, AI Mediator, Harmony Index, PDF report. AI không tự ghi dữ liệu: OCR chỉ trả bản nháp, gợi ý của trợ lý chỉ là nút để người dùng bấm.
+
+## Công nghệ
+
+| Lớp | Công nghệ |
+| :--- | :--- |
+| Framework | NestJS 12 (ESM), TypeScript 6 |
+| Database | PostgreSQL 17 (Docker khi chạy máy), Prisma 7 + `@prisma/adapter-pg` |
+| Xác thực | `@nestjs/jwt`, `passport-jwt`, `passport-google-oauth20`, `bcrypt` |
+| Realtime | Socket.IO 4.8 (`@nestjs/websockets`) |
+| Tác vụ nền | `@nestjs/schedule` (múi giờ `Asia/Ho_Chi_Minh`) |
+| Bảo mật | Helmet, `@nestjs/throttler`, `class-validator` (ValidationPipe whitelist) |
+| Tài liệu API | `@nestjs/swagger` tại `/api/docs` |
+| Bên ngoài | Gemini (`@google/genai`), Cloudinary (ảnh) |
+| Kiểm thử | Vitest 5, Supertest, oxlint |
+
+## Chạy trên máy
+
+Yêu cầu: Node 26 (xem `.nvmrc`; `package.json` đặt `>=26 <27`) và Docker (cho PostgreSQL).
 
 ```bash
 npm install                  # tự chạy prisma generate
-cp .env.example .env         # rồi đặt JWT_SECRET >= 64 ký tự (lệnh sinh có trong file)
+cp .env.example .env         # rồi đặt JWT_SECRET >= 64 ký tự (lệnh sinh có trong .env.example)
 npm run db:up                # Postgres container `nestfair-postgres`, cổng 5433
 npm run prisma:migrate       # áp migration + generate client
+npm run seed                 # (tùy chọn) nạp dữ liệu demo, xem mục Tài khoản demo
 npm run start:dev            # http://localhost:5000/api/v1
 ```
 
-Swagger: http://localhost:5000/api/docs
+Swagger: http://localhost:5000/api/docs. Kiểm tra sống: `GET /api/v1/health/live`.
 
-## Lệnh
+Muốn chạy bản build: `npm run build` rồi `npm run start:prod`.
+
+### Biến môi trường
+
+Sao chép từ `.env.example`; không commit `.env`.
+
+| Biến | Ý nghĩa |
+| :--- | :--- |
+| `PORT`, `NODE_ENV` | Cổng (mặc định 5000) và chế độ chạy. |
+| `CORS_ORIGINS` | Origin của frontend, cách nhau bằng dấu phẩy. |
+| `TRUST_PROXY_HOPS` | Số proxy đứng trước server để throttle lấy đúng IP: 0 khi chạy máy, Render = 1, Cloudflare + Render = 2. |
+| `COOKIE_SAME_SITE` | sameSite của cookie refresh (tùy chọn); để trống = production `none`, máy dev `lax`. |
+| `PUBLIC_WEB_URL` | Gốc link tin tìm người ở ghép (`<PUBLIC_WEB_URL>/r/<slug>`) và mã QR trên poster. |
+| `PUBLIC_API_URL` | URL công khai của API, hiện trong danh sách Servers của Swagger; để trống = chỉ localhost. |
+| `DATABASE_URL` | Chuỗi kết nối PostgreSQL (mẫu trong `.env.example` trỏ tới container Docker cổng 5433). |
+| `JWT_SECRET` | Khóa ký access token, tối thiểu 64 ký tự. |
+| `JWT_ACCESS_TTL_MINUTES`, `REFRESH_TOKEN_TTL_DAYS` | Thời hạn access token (15 phút) và refresh token (7 ngày). |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL` | Đăng nhập Google; để trống = tắt. |
+| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` hoặc `CLOUDINARY_URL` | Upload ảnh (check-in, hóa đơn, avatar); để trống = tắt upload. |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | OCR hóa đơn và trợ lý; để trống key = tắt OCR (chuyển nhập tay). Có key thì bắt buộc khai báo model, không hardcode trong code. |
+
+## Tài khoản demo
+
+`npm run seed` nạp **Nhà 12A** với 4 tài khoản, chạy lại bao nhiêu lần cũng được. Mật khẩu chung: `NestFair123`.
+
+| Email | Vai trò |
+| :--- | :--- |
+| `hung@nestfair.demo` | Trưởng phòng |
+| `thien@nestfair.demo` | Thành viên |
+| `mai@nestfair.demo` | Thành viên |
+| `quan@nestfair.demo` | Thành viên |
+
+Mã mời Nhà 12A: `K7M2QZ` (tối đa 5 người nên còn 1 chỗ để thử luồng vào nhà bằng mã). Dữ liệu mẫu gồm lịch trực, dữ liệu đổi ca, sổ chi tháng 10.2026 tổng 2.280.000đ (sau rút gọn: Thiện → Mai 380.000đ, Hùng → Quân 170.000đ), khoản chi từ OCR, tin tìm người ở ghép, tin nhắn trợ lý và nhắc nhở.
+
+Đây là dữ liệu demo công khai. Không chạy seed trên production.
+
+## Kiểm thử và chất lượng
 
 | Lệnh | Việc |
 | :--- | :--- |
-| `npm run start:dev` | Chạy dev, tự reload |
-| `npm run typecheck` / `npm run lint` | Kiểm tra kiểu, oxlint |
-| `npm test` | Unit test (Vitest, `src/**/*.spec.ts`) |
-| `npm run test:e2e` | E2E (`test/*.e2e-spec.ts`), **cần DB đang chạy** |
-| `npm run prisma:migrate` | Tạo/áp migration và generate client (Prisma 7 không tự generate sau migrate) |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run lint` | oxlint (type-aware) cho `src/`, `test/`, `prisma/` |
+| `npm test` | Unit test Vitest (`src/**/*.spec.ts`) |
+| `npm run test:cov` | Unit test kèm coverage |
+| `npm run test:e2e` | E2E (`test/*.e2e-spec.ts`), **cần DB đang chạy** (`npm run db:up`) |
 | `npm run format` | Prettier |
+| `npm run docs:export` | Build và xuất OpenAPI ra `docs/openapi.json` |
 
-## Cấu trúc
+Chạy như CI trên máy:
+
+```bash
+npm ci
+npm run typecheck && npm run lint && npm test && npm run build
+npm run db:up && npm run test:e2e -- --maxWorkers=4
+```
+
+### CI/CD (GitHub Actions, thư mục `.github/workflows/`)
+
+| Workflow | Việc |
+| :--- | :--- |
+| `ci.yml` | Typecheck, lint, unit test, build; e2e trên Postgres 17. Push vào `dev` hoặc `main` thì gọi `deploy.yml`. |
+| `security.yml` | `npm audit` (mức high trở lên), gitleaks, Semgrep, CodeQL; chạy cả theo lịch hằng tuần. |
+| `pr-title.yml` | Kiểm tiêu đề PR theo Conventional Commits. |
+| `deploy.yml` | Migrate DB, gọi deploy hook Render theo đúng commit, đợi bản mới, smoke test, rollback nếu lỗi. Prod có `pg_dump` trước khi migrate và chờ duyệt Environment `prod`. |
+| `seed-dev.yml` | Chạy tay: nạp lại dữ liệu demo cho môi trường dev (gõ `seed dev` để xác nhận). |
+
+## Cấu trúc thư mục
 
 ```text
-prisma/                 schema.prisma, migrations/
+prisma/                 schema.prisma, migrations/, seed.ts, seed-listing.ts
 src/
 ├── main.ts             bootstrap + Swagger
 ├── app.setup.ts        prefix /api/v1, Helmet, cookie-parser, CORS, ValidationPipe (dùng chung cho e2e)
 ├── config/             kiểm tra biến môi trường lúc khởi động
+├── common/             tiện ích dùng chung (swagger, throttle, lỗi có code, ngày giờ VN)
 ├── prisma/             PrismaService (global)
 ├── generated/prisma/   Prisma client (sinh ra, không commit)
 └── modules/
-    ├── auth/           đăng ký, đăng nhập, refresh token, Google OAuth, JwtAuthGuard, @CurrentUser
-    ├── users/          hồ sơ + tài khoản nhận tiền (ngân hàng + STK)
-    ├── houses/         nhà, mã mời, thành viên; HouseMemberGuard, HouseRolesGuard, @CurrentMembership
-    ├── chores/         việc nhà: lịch xoay vòng công bằng (algorithms/), check-in ảnh, duyệt chéo, vắng mặt, nghỉ nhà, nhật ký
-    ├── expenses/       sổ chi: chia tiền + Min Cash Flow (algorithms/), CRUD khoản chi, thống kê tháng, LedgerService (số dư ròng)
-    ├── settlements/    kế hoạch thanh toán tối ưu, tài khoản nhận tiền (VietQR), báo chuyển / xác nhận / hủy
-    ├── events/         Socket.IO gateway, EventsService (room house:<id>, user:<id>)
-    ├── scheduler/      cron: tạo lịch tuần mới, quá hạn, tự duyệt, dọn ảnh, khóa tuần (xem mục Việc nhà)
-    └── uploads/        CloudinaryService + kiểm tra ảnh (jpeg/png/webp, 5MB)
+    ├── auth/  users/  houses/  membership/
+    ├── chores/  wheel/  swaps/        việc nhà, Lucky Wheel, đổi ca
+    ├── expenses/  settlements/        chi tiêu, Min Cash Flow, thanh toán
+    ├── receipts/  ai/  assistant/  reminders/
+    ├── listing/                       tin tìm người ở ghép, trang công khai
+    ├── events/  notifications/  activity/
+    ├── scheduler/                     cron
+    └── uploads/                       Cloudinary
 test/                   e2e
+docs/                   DEPLOY.md, openapi.json
 ```
 
-Module mới: `src/modules/<tên>/` gồm `<tên>.module.ts`, controller, service, `dto/`, test `*.spec.ts` cạnh service. Route cần đăng nhập dùng `@UseGuards(JwtAuthGuard)` và lấy user bằng `@CurrentUser()`; trả user ra ngoài luôn qua `publicUserSelect`.
+Thuật toán thuần (xoay vòng, chia tiền, Min Cash Flow...) nằm ở `<module>/algorithms/*.ts` kèm `*.spec.ts`.
 
-### Thêm một module thuộc nhà (chores, expenses…)
+Mọi route trong nhà đi qua `/houses/:houseId/...` với `JwtAuthGuard` + `HouseMemberGuard`; `houseId` lấy từ membership đã xác thực, không tin dữ liệu client gửi.
+
+## Triển khai
+
+Có hai môi trường, mỗi môi trường một bộ dịch vụ riêng:
+
+| | dev | production |
+| :--- | :--- | :--- |
+| Nhánh | `dev` | `main` |
+| Backend | Render (Free) `nestfair-api-dev` | Render (Free) `nestfair-api-prod` |
+| Frontend | Cloudflare Pages `nestfair-dev` | Cloudflare Pages `nestfair-prod` |
+| Database | Neon | Neon |
+
+Bản dev đang chạy:
+
+- Web: https://nestfair-dev.pages.dev
+- API: https://nestfair-api-dev.onrender.com (Swagger: https://nestfair-api-dev.onrender.com/api/docs)
+
+Production và tên miền riêng chưa được thiết lập. Render Free ngủ sau 15 phút không có request nên lần gọi đầu có thể chậm vài chục giây. Hướng dẫn thiết lập đầy đủ (Neon, Render Blueprint `render.yaml`, Cloudflare Pages, GitHub Environments) nằm ở [docs/DEPLOY.md](docs/DEPLOY.md).
+
+## Quy trình Git
+
+- Nhánh: `main` (production) ← `dev` ← `feat/<module>-<mô-tả>`. Không push thẳng `main` hay `dev`.
+- Mỗi issue một PR vào `dev`, người còn lại review rồi mới merge.
+- Commit và tiêu đề PR theo Conventional Commits có scope module, ví dụ `feat(chores): ...`, `fix(expenses): ...`.
+
+Chi tiết xem [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+# Ghi chú kỹ thuật theo module
+
+Phần dưới là tài liệu chi tiết của từng module (đã có từ trước).
+
+## Thêm một module thuộc nhà (chores, expenses…)
 
 Mọi dữ liệu của một nhà đi qua route `/houses/:houseId/...` và **luôn** có `HouseMemberGuard`:
 
@@ -80,25 +197,6 @@ export class ChoresController {
 - `HouseMemberGuard`: houseId sai định dạng trả 404; không phải thành viên (hoặc đã rời nhà) trả 403. Gắn `{ id, houseId, userId, role }` vào request.
 - Query trong service luôn lọc theo `m.houseId`; id con (choreId…) phải kiểm tra thuộc đúng nhà đó, nếu không thành viên nhà A sửa được dữ liệu nhà B.
 - Thành viên còn ở nhà: `leftAt: null`.
-
-## Dữ liệu demo
-
-```bash
-npm run seed       # Nhà 12A + 4 tài khoản, chạy lại bao nhiêu lần cũng được
-```
-
-| Email | Vai trò | Ngân hàng |
-| :--- | :--- | :--- |
-| `hung@nestfair.demo` | Trưởng phòng | Techcombank |
-| `thien@nestfair.demo` | Thành viên | Vietcombank |
-| `mai@nestfair.demo` | Thành viên | ACB |
-| `quan@nestfair.demo` | Thành viên | MB Bank |
-
-Mật khẩu chung: `NestFair123`. Mã mời Nhà 12A: `K7M2QZ` (seed đặt lại hạn 7 ngày mỗi lần chạy). Nhà 12A tối đa 5 người nên còn 1 chỗ để thử luồng vào nhà bằng mã.
-
-Sổ chi: tháng 10.2026 có 6 hóa đơn, tổng 2.280.000đ (khớp ảnh thiết kế 07). Tháng 9 đã tất toán hết. Thiện đang báo chuyển 380.000đ cho Mai (chờ Mai xác nhận).
-Kế hoạch rút gọn: Thiện → Mai 380.000đ, Hùng → Quân 170.000đ.
-Hai khoản chi ("Đi chợ cuối tuần", "Nước rửa chén & giấy") có nguồn từ OCR: mỗi khoản gắn một `ReceiptScan` đã dùng (tổng món bằng tổng khoản chi, không đổi số dư). Không người dùng demo nào đã đồng ý gửi ảnh tới Gemini: lần quét đầu tiên sẽ hiện hộp thoại hỏi.
 
 ## Auth (tóm tắt)
 

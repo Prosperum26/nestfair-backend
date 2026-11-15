@@ -23,7 +23,7 @@ Luồng tự động sau khi thiết lập:
 
 ## Bước 1. Neon (2 project)
 
-1. Đăng ký [neon.com](https://neon.com), tạo project `nestfair-dev`: Postgres 17, region **AWS Asia Pacific (Singapore)**.
+1. Đăng ký [neon.com](https://neon.com), tạo project `nestfair-dev`: Postgres 18 (mặc định hiện tại của Neon; chọn 18 để khớp bước sao lưu), region **AWS Asia Pacific (Singapore)**.
 2. Tạo tiếp project `nestfair-prod` cùng cấu hình.
 3. Ở mỗi project, mở **Connect**, **tắt Connection pooling** để lấy chuỗi *direct* (host không có `-pooler`), giữ `sslmode=require`.
    Backend dùng khóa advisory và `SELECT ... FOR UPDATE` trong transaction, chuỗi direct tránh bất ngờ với pooler.
