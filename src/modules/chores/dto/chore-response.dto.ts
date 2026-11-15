@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ChoreFrequency, RotationMode } from '../../../generated/prisma/enums.js';
 
 export class ChoreDto {
@@ -26,8 +26,14 @@ export class ChoreDto {
   @ApiProperty({ description: 'PER_OCCURRENCE only: the same person does not repeat the chore within this many occurrences.' })
   occurrenceGap: number;
 
-  @ApiProperty({ description: 'false when the chore is paused and no longer scheduled.' })
+  @ApiProperty({ description: 'false when the chore is paused or archived and no longer scheduled.' })
   isActive: boolean;
+
+  @ApiProperty({ type: String, format: 'date-time', nullable: true, description: 'When the chore was archived; null when it is not archived.' })
+  archivedAt: string | null;
+
+  @ApiPropertyOptional({ description: 'Only in the archived list: true when the chore never had any activity and can be deleted permanently.' })
+  canPurge?: boolean;
 }
 
 export class ChoreSettingsDto {

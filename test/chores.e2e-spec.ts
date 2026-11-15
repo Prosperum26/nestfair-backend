@@ -89,6 +89,27 @@ describe('Chores (e2e)', () => {
     await fx.as(b.users[1].token).patch(url(b.houseId, `/${chore.body.id}`), { title: 'Hack' }).expect(403);
   });
 
+  it('danh sách mặc định và includeInactive không trả việc đã lưu trữ; archived=true chỉ trả việc đã lưu trữ', async () => {
+    const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);
+    const admin = fx.as(users[0].token);
+    const make = async (title: string) =>
+      (await admin.post(url(houseId), { title, weight: 2, frequency: 'WEEKLY', recurrenceDays: [3] }).expect(201)).body.id as string;
+    const active = await make('Đang chạy');
+    const paused = await make('Tạm ngưng');
+    const archived = await make('Đã lưu trữ');
+    await admin.patch(url(houseId, `/${paused}`), { isActive: false }).expect(200);
+    await fx.prisma.chore.update({ where: { id: archived }, data: { isActive: false, archivedAt: new Date() } });
+
+    const ids = async (query: string) => ((await admin.get(url(houseId, query)).expect(200)).body as { id: string }[]).map((c) => c.id).sort();
+    expect(await ids('')).toEqual([active]);
+    expect(await ids('?includeInactive=true')).toEqual([active, paused].sort());
+    const onlyArchived = (await admin.get(url(houseId, '?archived=true')).expect(200)).body as { id: string; archivedAt: string | null }[];
+    expect(onlyArchived.map((c) => c.id)).toEqual([archived]);
+    expect(onlyArchived[0].archivedAt).toEqual(expect.any(String));
+    const all = (await admin.get(url(houseId, '?includeInactive=true')).expect(200)).body as { archivedAt: string | null }[];
+    expect(all.every((c) => c.archivedAt === null)).toBe(true);
+  });
+
   it('S-27/S-28: sửa weight giữ snapshot ca đã sinh; tắt việc hủy ca TODO tương lai, không đụng ca DONE; ghi audit', async () => {
     const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
     const admin = fx.as(h.users[0].token);

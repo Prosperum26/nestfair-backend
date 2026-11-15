@@ -296,6 +296,8 @@ model Chore {
   isActive       Boolean        @default(true)
   /// Việc hệ thống, không hiện ở trang cài đặt, không vào lịch xoay. Hiện chỉ dùng cho "Việc đột xuất" của Lucky Wheel.
   isSystem       Boolean        @default(false)
+  /// Đã lưu trữ ("xóa" ở giao diện): ẩn khỏi danh sách, không sinh ca mới, lịch sử giữ nguyên. Luôn đi kèm isActive = false.
+  archivedAt     DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 

@@ -48,14 +48,14 @@ export class ChoresController {
     summary: 'List chores',
     description:
       'Returns the recurring chores defined for the house. By default only active chores are returned; pass ' +
-      '`includeInactive=true` to include paused ones. The system chore used by the Lucky Wheel is not a normal chore and is not listed.',
+      '`includeInactive=true` to include paused ones, or `archived=true` to list only archived ones. The system chore used by the Lucky Wheel is not a normal chore and is not listed.',
   })
   @ApiOkResponse({ type: [ChoreDto], description: 'Chores of the house.' })
   list(
     @CurrentMembership() m: HouseMembership,
     @Query() query: ListChoresQuery,
   ): Promise<ChoreDto[]> {
-    return this.chores.list(m.houseId, query.includeInactive);
+    return this.chores.list(m.houseId, { includeInactive: query.includeInactive, archived: query.archived });
   }
 
   @Post()

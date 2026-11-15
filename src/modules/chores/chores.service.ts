@@ -22,6 +22,7 @@ const toDto = (c: Chore): ChoreDto => ({
   rotationMode: c.rotationMode,
   occurrenceGap: c.occurrenceGap,
   isActive: c.isActive,
+  archivedAt: c.archivedAt ? c.archivedAt.toISOString() : null,
 });
 
 const TRACKED = ['title', 'weight', 'frequency', 'recurrenceDays', 'dueTime', 'rotationMode', 'occurrenceGap'] as const;
@@ -36,10 +37,16 @@ export class ChoresService {
     private readonly debts: ChoreDebtService,
   ) {}
 
-  async list(houseId: string, includeInactive = false): Promise<ChoreDto[]> {
+  async list(houseId: string, opts: { includeInactive?: boolean; archived?: boolean } = {}): Promise<ChoreDto[]> {
     const rows = await this.prisma.chore.findMany({
       // Việc hệ thống ("Việc đột xuất" của vòng quay) không hiện ở danh sách / màn cài đặt.
-      where: { houseId, isSystem: false, ...(includeInactive ? {} : { isActive: true }) },
+      // Việc đã lưu trữ chỉ hiện khi hỏi riêng (`archived`), kể cả khi `includeInactive`.
+      where: {
+        houseId,
+        isSystem: false,
+        archivedAt: opts.archived ? { not: null } : null,
+        ...(opts.archived || opts.includeInactive ? {} : { isActive: true }),
+      },
       orderBy: { createdAt: 'asc' },
     });
     return rows.map(toDto);
