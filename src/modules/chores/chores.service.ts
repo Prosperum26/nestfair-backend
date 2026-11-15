@@ -9,6 +9,8 @@ import { EventsService, type Outbox } from '../events/events.service.js';
 import { AuditService } from './audit.service.js';
 import { hasChoreHistory } from './chore-history.js';
 import { normalizeChore } from './chore-rules.js';
+import { dateOf } from './schedule-context.js';
+import { addDays, dueAtOf, toDateStr, weekKeyFromStart, weekStartOf } from './week.js';
 import type { ChoreDto } from './dto/chore-response.dto.js';
 import type { CreateChoreDto } from './dto/create-chore.dto.js';
 import type { UpdateChoreDto } from './dto/update-chore.dto.js';
@@ -55,11 +57,41 @@ export class ChoresService {
     return Promise.all(dtos.map(async (d) => Object.assign(d, { canPurge: !(await hasChoreHistory(this.prisma, d.id)) })));
   }
 
-  async create(houseId: string, actorMemberId: string, dto: CreateChoreDto): Promise<ChoreDto> {
+  async create(houseId: string, actorMemberId: string, dto: CreateChoreDto, now: Date = new Date()): Promise<ChoreDto> {
     const shape = normalizeChore(dto);
     const row = await this.prisma.chore.create({ data: { houseId, title: dto.title, weight: dto.weight, ...shape } });
     await this.audit.log(houseId, actorMemberId, 'CHORE_CREATED', { choreId: row.id, title: row.title });
+    if (row.frequency === 'ADHOC') await this.createAdhocSlot(houseId, row, now);
     return toDto(row);
+  }
+
+  /**
+   * Việc đột xuất không vào vòng xoay nên cần một ca ngay: nhà 1 người thì giao thẳng cho người đó, nhà đông hơn để UNASSIGNED
+   * cho ai đó bấm "Nhận việc". Hạn là hôm nay (giờ VN), hoặc ngày mai nếu giờ hạn hôm nay đã qua.
+   */
+  private async createAdhocSlot(houseId: string, chore: Chore, now: Date): Promise<void> {
+    const members = await this.prisma.houseMember.findMany({ where: { houseId, leftAt: null }, select: { id: true } });
+    let date = toDateStr(now);
+    if (dueAtOf(date, chore.dueTime).getTime() <= now.getTime()) date = addDays(date, 1);
+    const weekStart = weekStartOf(date);
+    const assigneeId = members.length === 1 ? members[0].id : null;
+    await this.prisma.choreAssignment.create({
+      data: {
+        houseId,
+        choreId: chore.id,
+        assigneeId,
+        originalAssigneeId: assigneeId,
+        weekKey: weekKeyFromStart(weekStart),
+        weekStart: dateOf(weekStart),
+        occurrenceDate: dateOf(date),
+        slotIndex: 0,
+        dueAt: dueAtOf(date, chore.dueTime),
+        titleSnapshot: chore.title,
+        weightSnapshot: chore.weight,
+        source: 'ROTATION',
+        status: assigneeId ? 'TODO' : 'UNASSIGNED',
+      },
+    });
   }
 
   async update(

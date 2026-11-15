@@ -1,4 +1,4 @@
-export type SlotSource = 'ROTATION' | 'SWAP' | 'COVER' | 'PAYBACK' | 'WHEEL' | 'REASSIGN';
+export type SlotSource = 'ROTATION' | 'SWAP' | 'COVER' | 'PAYBACK' | 'WHEEL' | 'REASSIGN' | 'CLAIM';
 
 /** Số tuần có lịch dùng để tính tải tích lũy (R-FAIR-2). */
 export const LOAD_WEEKS = 6;
@@ -29,7 +29,7 @@ export function rollingLoad(
     memberIds.map((m) => [m, (opts.credit?.[m] ?? 0) + (opts.baseline?.[m] ?? 0)]),
   );
   for (const h of history) {
-    if (h.source === 'WHEEL') continue;
+    if (h.source === 'WHEEL' || h.source === 'CLAIM') continue;
     if (h.weeksBack >= 1 && h.weeksBack <= LOAD_WEEKS && h.memberId in load) load[h.memberId] += h.weight;
   }
   return load;

@@ -259,6 +259,8 @@ enum AssignmentSource {
   PAYBACK
   WHEEL
   REASSIGN
+  /// Việc đột xuất: một thành viên tự nhận ca chưa có người.
+  CLAIM
 }
 
 enum AssignmentStatus {
