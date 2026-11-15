@@ -96,10 +96,55 @@ export class ChoresService {
   }
 
   /**
+   * "Xóa" ở giao diện = lưu trữ: ẩn việc, không sinh ca mới, giữ lịch sử. Idempotent. Việc đang bật đi qua luồng tắt việc
+   * (hủy ca TODO / chưa có người ở tương lai); việc đã tạm ngưng thì chỉ đặt `archivedAt`.
+   */
+  async archive(houseId: string, actorMemberId: string, choreId: string, now: Date = new Date()): Promise<ChoreDto> {
+    const row = await this.prisma.chore.findFirst({ where: { id: choreId, houseId } });
+    if (!row) throw new NotFoundException('Không tìm thấy việc này.');
+    if (row.isSystem) throw coded(HttpStatus.FORBIDDEN, 'SYSTEM_CHORE', 'Đây là việc hệ thống của vòng quay, không lưu trữ được.');
+    if (row.archivedAt) return toDto(row);
+
+    // Điều kiện `archivedAt: null` để hai lần lưu trữ song song chỉ một bên ghi nhật ký và hủy ca.
+    const claimed = await this.prisma.chore.updateMany({ where: { id: choreId, houseId, archivedAt: null }, data: { archivedAt: now, isActive: false } });
+    const updated = await this.prisma.chore.findUniqueOrThrow({ where: { id: choreId } });
+    if (claimed.count === 0) return toDto(updated);
+
+    await this.audit.log(houseId, actorMemberId, 'CHORE_ARCHIVED', { choreId, title: row.title });
+    if (row.isActive) {
+      await this.deactivate(houseId, actorMemberId, updated, now, 'chore.archived');
+    } else {
+      const actor = await actorOfMember(this.prisma, actorMemberId);
+      const outbox = this.events.outbox();
+      await this.prisma.$transaction((tx) =>
+        this.activity.record(tx, outbox, { houseId, type: 'chore.archived', actor, params: { choreId, choreTitle: row.title, cancelled: 0 } }),
+      );
+      outbox.flush();
+    }
+    return toDto(updated);
+  }
+
+  /** Khôi phục về trạng thái tạm ngưng (`isActive` vẫn false): trưởng phòng bấm "Bật lại" thì mới sinh ca. */
+  async restore(houseId: string, actorMemberId: string, choreId: string): Promise<ChoreDto> {
+    const row = await this.prisma.chore.findFirst({ where: { id: choreId, houseId } });
+    if (!row) throw new NotFoundException('Không tìm thấy việc này.');
+    if (!row.archivedAt) throw coded(HttpStatus.CONFLICT, 'CHORE_NOT_ARCHIVED', 'Việc này chưa được lưu trữ.');
+    const updated = await this.prisma.chore.update({ where: { id: choreId }, data: { archivedAt: null } });
+    await this.audit.log(houseId, actorMemberId, 'CHORE_RESTORED', { choreId, title: row.title });
+    return toDto(updated);
+  }
+
+  /**
    * S-28: tắt việc thì ca TODO / chưa có người ở tương lai thành CANCELLED (lịch sử giữ nguyên).
    * Hủy ca, nhật ký và Live Ticker (một mục cho cả việc) ghi cùng một transaction.
    */
-  private async deactivate(houseId: string, actorMemberId: string, chore: Chore, now: Date): Promise<void> {
+  private async deactivate(
+    houseId: string,
+    actorMemberId: string,
+    chore: Chore,
+    now: Date,
+    activityType: 'chore.paused' | 'chore.archived' = 'chore.paused',
+  ): Promise<void> {
     const where = {
       houseId,
       choreId: chore.id,
@@ -116,7 +161,7 @@ export class ChoresService {
         outbox.toHouse(houseId, 'chore:cancelled', { choreId: chore.id, assignmentIds: ids }, actor);
       }
       await this.audit.log(houseId, actorMemberId, 'CHORE_DEACTIVATED', { choreId: chore.id, cancelled: ids.length }, {}, tx);
-      await this.activity.record(tx, outbox, { houseId, type: 'chore.paused', actor, params: { choreId: chore.id, choreTitle: chore.title, cancelled: ids.length } });
+      await this.activity.record(tx, outbox, { houseId, type: activityType, actor, params: { choreId: chore.id, choreTitle: chore.title, cancelled: ids.length } });
     });
     outbox.flush();
   }

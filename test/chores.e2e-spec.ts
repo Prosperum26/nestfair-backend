@@ -134,6 +134,84 @@ describe('Chores (e2e)', () => {
     expect(actions).toEqual(['CHORE_CREATED', 'CHORE_DEACTIVATED', 'CHORE_UPDATED']);
   });
 
+  describe('lưu trữ và khôi phục', () => {
+    const makeChore = async (token: string, houseId: string, title = 'Dọn bếp') =>
+      (await fx.as(token).post(url(houseId), { title, weight: 2, frequency: 'DAILY' }).expect(201)).body as { id: string };
+    const actionsOf = async (houseId: string) => (await fx.prisma.choreAuditLog.findMany({ where: { houseId } })).map((l) => l.action);
+
+    it('ADMIN lưu trữ: ca TODO tương lai thành CANCELLED, ca DONE giữ nguyên, việc ẩn khỏi danh sách, ghi audit CHORE_ARCHIVED', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+      const chore = await makeChore(h.users[0].token, h.houseId);
+      await fx.app.get(ScheduleService).ensureSchedule(h.houseId, addDays(currentWeekStart(), 7), 'CRON', openAtOf(currentWeekStart()));
+      const rows = await fx.prisma.choreAssignment.findMany({ where: { houseId: h.houseId }, orderBy: { occurrenceDate: 'asc' } });
+      await fx.prisma.choreAssignment.update({ where: { id: rows[0].id }, data: { status: 'DONE' } });
+
+      const res = await fx.as(h.users[0].token).delete(url(h.houseId, `/${chore.id}`)).expect(200);
+      expect(res.body).toMatchObject({ id: chore.id, isActive: false, archivedAt: expect.any(String) });
+
+      const after = await fx.prisma.choreAssignment.findMany({ where: { houseId: h.houseId }, orderBy: { occurrenceDate: 'asc' } });
+      expect(after[0].status).toBe('DONE');
+      expect(after.slice(1).every((a) => a.status === 'CANCELLED')).toBe(true);
+      expect((await fx.as(h.users[1].token).get(url(h.houseId, '?includeInactive=true')).expect(200)).body).toEqual([]);
+      expect(await actionsOf(h.houseId)).toContain('CHORE_ARCHIVED');
+    });
+
+    it('lưu trữ hai lần là idempotent: lần hai 200, không thêm audit, không đổi ca', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const chore = await makeChore(h.users[0].token, h.houseId);
+      const admin = fx.as(h.users[0].token);
+      const first = await admin.delete(url(h.houseId, `/${chore.id}`)).expect(200);
+      const second = await admin.delete(url(h.houseId, `/${chore.id}`)).expect(200);
+      expect(second.body.archivedAt).toBe(first.body.archivedAt);
+      expect((await actionsOf(h.houseId)).filter((a) => a === 'CHORE_ARCHIVED')).toHaveLength(1);
+    });
+
+    it('việc đang tạm ngưng rồi lưu trữ: chỉ đặt archivedAt, không hủy ca lần nữa', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const chore = await makeChore(h.users[0].token, h.houseId);
+      const admin = fx.as(h.users[0].token);
+      await admin.patch(url(h.houseId, `/${chore.id}`), { isActive: false }).expect(200);
+      await admin.delete(url(h.houseId, `/${chore.id}`)).expect(200);
+      const actions = await actionsOf(h.houseId);
+      expect(actions.filter((a) => a === 'CHORE_DEACTIVATED')).toHaveLength(1);
+      expect(actions).toContain('CHORE_ARCHIVED');
+      expect((await fx.prisma.chore.findUniqueOrThrow({ where: { id: chore.id } })).archivedAt).not.toBeNull();
+    });
+
+    it('ROOMMATE gọi DELETE → 403; việc nhà khác → 404; việc isSystem → 403 SYSTEM_CHORE', async () => {
+      const a = await fx.houseWith(['Hùng', 'Thiện']);
+      const b = await fx.houseWith(['Mai', 'Quân']);
+      const chore = await makeChore(a.users[0].token, a.houseId);
+      await fx.as(a.users[1].token).delete(url(a.houseId, `/${chore.id}`)).expect(403);
+      await fx.as(b.users[0].token).delete(url(b.houseId, `/${chore.id}`)).expect(404);
+      const system = await fx.prisma.chore.create({ data: { houseId: a.houseId, title: 'Việc hệ thống', weight: 1, frequency: 'ADHOC', recurrenceDays: [], isSystem: true } });
+      const res = await fx.as(a.users[0].token).delete(url(a.houseId, `/${system.id}`)).expect(403);
+      expect(res.body.code ?? res.body.message).toEqual(expect.stringContaining('SYSTEM_CHORE'));
+      expect((await fx.prisma.chore.findUniqueOrThrow({ where: { id: chore.id } })).archivedAt).toBeNull();
+    });
+
+    it('khôi phục: archivedAt = null, isActive vẫn false, hiện ở includeInactive; việc chưa lưu trữ → 409', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const chore = await makeChore(h.users[0].token, h.houseId);
+      const admin = fx.as(h.users[0].token);
+      await admin.post(url(h.houseId, `/${chore.id}/restore`)).expect(409);
+      await admin.delete(url(h.houseId, `/${chore.id}`)).expect(200);
+      await fx.as(h.users[1].token).post(url(h.houseId, `/${chore.id}/restore`)).expect(403);
+      const res = await admin.post(url(h.houseId, `/${chore.id}/restore`)).expect(200);
+      expect(res.body).toMatchObject({ archivedAt: null, isActive: false });
+      expect((await admin.get(url(h.houseId, '?includeInactive=true')).expect(200)).body).toHaveLength(1);
+      expect(await actionsOf(h.houseId)).toContain('CHORE_RESTORED');
+    });
+
+    it('việc đã lưu trữ không sinh ca khi chạy sinh lịch tuần', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const chore = await makeChore(h.users[0].token, h.houseId);
+      await fx.as(h.users[0].token).delete(url(h.houseId, `/${chore.id}`)).expect(200);
+      await fx.app.get(ScheduleService).ensureSchedule(h.houseId, addDays(currentWeekStart(), 7), 'CRON', openAtOf(currentWeekStart()));
+      expect(await fx.prisma.choreAssignment.count({ where: { choreId: chore.id } })).toBe(0);
+    });
+  });
+
   describe('chore-settings', () => {
     it('mặc định 3 giờ ân hạn và 2 ca/người/ngày; Admin chỉnh được, member 403', async () => {
       const { houseId, users } = await fx.houseWith(['Hùng', 'Thiện']);

@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -96,5 +98,49 @@ export class ChoresController {
     @Body() dto: UpdateChoreDto,
   ): Promise<ChoreDto> {
     return this.chores.update(m.houseId, m.id, choreId, dto);
+  }
+
+  @Delete(':choreId')
+  @HouseRoles('ADMIN')
+  @ApiParam({ name: 'choreId', format: 'uuid', description: 'Id of the chore.' })
+  @ApiOperation({
+    summary: 'Archive a chore (admin)',
+    description:
+      'The "delete" of the UI. The chore disappears from every list and is never scheduled again, but its history, points and ' +
+      'debts are kept. An active chore has its future TODO or unassigned slots cancelled (same as pausing). Idempotent: ' +
+      'archiving an archived chore returns it unchanged. Admin only.',
+  })
+  @ApiOkResponse({ type: ChoreDto, description: 'The archived chore.' })
+  @ApiErrors(
+    [403, 'Code `SYSTEM_CHORE` for the Lucky Wheel system chore, or the caller is not the admin.'],
+    [404, 'The chore does not belong to this house.'],
+  )
+  archive(
+    @CurrentMembership() m: HouseMembership,
+    @Param('choreId', ParseUUIDPipe) choreId: string,
+  ): Promise<ChoreDto> {
+    return this.chores.archive(m.houseId, m.id, choreId);
+  }
+
+  @Post(':choreId/restore')
+  @HttpCode(200)
+  @HouseRoles('ADMIN')
+  @ApiParam({ name: 'choreId', format: 'uuid', description: 'Id of the chore.' })
+  @ApiOperation({
+    summary: 'Restore an archived chore (admin)',
+    description:
+      'Brings an archived chore back as a paused chore (`isActive` stays false): the admin re-enables it to schedule it again. Admin only.',
+  })
+  @ApiOkResponse({ type: ChoreDto, description: 'The restored (paused) chore.' })
+  @ApiErrors(
+    [403, 'The caller is not the admin.'],
+    [404, 'The chore does not belong to this house.'],
+    [409, 'Code `CHORE_NOT_ARCHIVED`: the chore is not archived.'],
+  )
+  restore(
+    @CurrentMembership() m: HouseMembership,
+    @Param('choreId', ParseUUIDPipe) choreId: string,
+  ): Promise<ChoreDto> {
+    return this.chores.restore(m.houseId, m.id, choreId);
   }
 }
