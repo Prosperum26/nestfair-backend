@@ -53,6 +53,7 @@ export const ERROR_CODES: Record<string, readonly [status: number, meaning: stri
   PROOF_REQUIRED: [400, 'A proof photo file is required.'],
   SELF_VERIFY_FORBIDDEN: [403, 'Members cannot verify their own assignment.'],
   SYSTEM_CHORE: [403, 'System chores (the Lucky Wheel ad-hoc chore) cannot be edited, archived or deleted directly.'],
+  CHORE_HAS_HISTORY: [409, 'The chore already has history (done or submitted slots, debts or swap requests), so it can only be archived, not deleted permanently.'],
   CHORE_NOT_ARCHIVED: [409, 'The chore is not archived, so it cannot be restored or deleted permanently.'],
   INVALID_DATE_RANGE: [400, 'The date range is invalid (start after end, malformed date or too long).'],
   NOT_ELIGIBLE_MEMBER: [400, 'The member is not an active member of the house.'],

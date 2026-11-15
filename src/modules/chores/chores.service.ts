@@ -7,6 +7,7 @@ import { ActivityService } from '../activity/activity.service.js';
 import { actorOfMember } from '../events/actor.js';
 import { EventsService } from '../events/events.service.js';
 import { AuditService } from './audit.service.js';
+import { hasChoreHistory } from './chore-history.js';
 import { normalizeChore } from './chore-rules.js';
 import type { ChoreDto } from './dto/chore-response.dto.js';
 import type { CreateChoreDto } from './dto/create-chore.dto.js';
@@ -49,7 +50,9 @@ export class ChoresService {
       },
       orderBy: { createdAt: 'asc' },
     });
-    return rows.map(toDto);
+    const dtos = rows.map(toDto);
+    if (!opts.archived) return dtos;
+    return Promise.all(dtos.map(async (d) => Object.assign(d, { canPurge: !(await hasChoreHistory(this.prisma, d.id)) })));
   }
 
   async create(houseId: string, actorMemberId: string, dto: CreateChoreDto): Promise<ChoreDto> {
@@ -132,6 +135,25 @@ export class ChoresService {
     const updated = await this.prisma.chore.update({ where: { id: choreId }, data: { archivedAt: null } });
     await this.audit.log(houseId, actorMemberId, 'CHORE_RESTORED', { choreId, title: row.title });
     return toDto(updated);
+  }
+
+  /**
+   * Xóa hẳn khỏi DB, chỉ cho việc đã lưu trữ và chưa từng có hoạt động. Khóa dòng việc rồi kiểm lại trong cùng transaction,
+   * để một lần xóa song song hoặc một check-in đang diễn ra không lọt qua điều kiện. Ca CANCELLED / TODO của việc xóa theo (cascade).
+   */
+  async purge(houseId: string, actorMemberId: string, choreId: string): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<{ title: string; archivedAt: Date | null }[]>`
+        SELECT "title", "archivedAt" FROM "chores" WHERE "id" = ${choreId}::uuid AND "houseId" = ${houseId}::uuid AND "isSystem" = false FOR UPDATE`;
+      const row = locked[0];
+      if (!row) throw new NotFoundException('Không tìm thấy việc này.');
+      if (!row.archivedAt) throw coded(HttpStatus.CONFLICT, 'CHORE_NOT_ARCHIVED', 'Hãy lưu trữ việc này trước khi xóa vĩnh viễn.');
+      if (await hasChoreHistory(tx, choreId)) {
+        throw coded(HttpStatus.CONFLICT, 'CHORE_HAS_HISTORY', 'Việc này đã có lịch sử nên chỉ lưu trữ được, không xóa vĩnh viễn.');
+      }
+      await tx.chore.delete({ where: { id: choreId } });
+      await this.audit.log(houseId, actorMemberId, 'CHORE_PURGED', { choreId, title: row.title }, {}, tx);
+    });
   }
 
   /**

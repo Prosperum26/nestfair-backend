@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { vi } from 'vitest';
 import { ScheduleService } from '../src/modules/chores/schedule.service.js';
 import { addDays, currentWeekStart, openAtOf } from '../src/modules/chores/week.js';
@@ -209,6 +210,113 @@ describe('Chores (e2e)', () => {
       await fx.as(h.users[0].token).delete(url(h.houseId, `/${chore.id}`)).expect(200);
       await fx.app.get(ScheduleService).ensureSchedule(h.houseId, addDays(currentWeekStart(), 7), 'CRON', openAtOf(currentWeekStart()));
       expect(await fx.prisma.choreAssignment.count({ where: { choreId: chore.id } })).toBe(0);
+    });
+  });
+
+  describe('xóa vĩnh viễn', () => {
+    const purgeUrl = (houseId: string, id: string) => url(houseId, `/${id}/permanent`);
+    /** Việc đã lưu trữ kèm các ca sinh cho tuần sau. */
+    async function archivedChoreWithSlots() {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+      const admin = fx.as(h.users[0].token);
+      const chore = (await admin.post(url(h.houseId), { title: 'Dọn bếp', weight: 2, frequency: 'DAILY' }).expect(201)).body as { id: string };
+      await fx.app.get(ScheduleService).ensureSchedule(h.houseId, addDays(currentWeekStart(), 7), 'CRON', openAtOf(currentWeekStart()));
+      await admin.delete(url(h.houseId, `/${chore.id}`)).expect(200);
+      const slots = await fx.prisma.choreAssignment.findMany({ where: { choreId: chore.id } });
+      return { h, admin, chore, slots };
+    }
+
+    it('purge việc đã lưu trữ chỉ có ca CANCELLED/TODO: 204, việc và các ca bị xóa, ghi audit CHORE_PURGED', async () => {
+      const { h, admin, chore, slots } = await archivedChoreWithSlots();
+      expect(slots.length).toBeGreaterThan(0);
+      await admin.delete(purgeUrl(h.houseId, chore.id)).expect(204);
+      expect(await fx.prisma.chore.count({ where: { id: chore.id } })).toBe(0);
+      expect(await fx.prisma.choreAssignment.count({ where: { choreId: chore.id } })).toBe(0);
+      const purged = await fx.prisma.choreAuditLog.findMany({ where: { houseId: h.houseId, action: 'CHORE_PURGED' } });
+      expect(purged).toHaveLength(1);
+      expect(purged[0].detail).toMatchObject({ choreId: chore.id, title: 'Dọn bếp' });
+    });
+
+    it('purge → 409 CHORE_HAS_HISTORY khi có ca DONE; khi có ChoreDebt trỏ tới ca; khi có ChoreSwapRequest trỏ tới ca; không xóa gì', async () => {
+      const cases: { name: string; seed: (c: Awaited<ReturnType<typeof archivedChoreWithSlots>>) => Promise<void> }[] = [
+        { name: 'ca DONE', seed: async (c) => void (await fx.prisma.choreAssignment.update({ where: { id: c.slots[0].id }, data: { status: 'DONE' } })) },
+        {
+          name: 'ChoreDebt',
+          seed: async (c) =>
+            void (await fx.prisma.choreDebt.create({
+              data: {
+                houseId: c.h.houseId,
+                debtorMemberId: c.h.memberId(c.h.users[1]),
+                creditorMemberId: c.h.memberId(c.h.users[2]),
+                swapRequestId: randomUUID(),
+                coverAssignmentId: c.slots[0].id,
+                weight: 1,
+              },
+            })),
+        },
+        {
+          name: 'ChoreSwapRequest',
+          seed: async (c) =>
+            void (await fx.prisma.choreSwapRequest.create({
+              data: {
+                houseId: c.h.houseId,
+                type: 'COVER',
+                compensation: 'PAYBACK',
+                requesterMemberId: c.h.memberId(c.h.users[1]),
+                fromAssignmentId: c.slots[0].id,
+                status: 'CANCELLED',
+                expiresAt: new Date(),
+                rootRequestId: randomUUID(),
+                fromWeightSnapshot: 1,
+              },
+            })),
+        },
+      ];
+      for (const c of cases) {
+        const ctx = await archivedChoreWithSlots();
+        await c.seed(ctx);
+        const res = await ctx.admin.delete(purgeUrl(ctx.h.houseId, ctx.chore.id)).expect(409);
+        expect(JSON.stringify(res.body), c.name).toContain('CHORE_HAS_HISTORY');
+        expect(await fx.prisma.chore.count({ where: { id: ctx.chore.id } }), c.name).toBe(1);
+        expect(await fx.prisma.choreAssignment.count({ where: { choreId: ctx.chore.id } }), c.name).toBe(ctx.slots.length);
+      }
+    });
+
+    it('purge việc chưa lưu trữ → 409 CHORE_NOT_ARCHIVED', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const admin = fx.as(h.users[0].token);
+      const chore = (await admin.post(url(h.houseId), { title: 'A', weight: 1, frequency: 'WEEKLY', recurrenceDays: [1] }).expect(201)).body as { id: string };
+      const res = await admin.delete(purgeUrl(h.houseId, chore.id)).expect(409);
+      expect(JSON.stringify(res.body)).toContain('CHORE_NOT_ARCHIVED');
+      expect(await fx.prisma.chore.count({ where: { id: chore.id } })).toBe(1);
+    });
+
+    it('ROOMMATE → 403; nhà khác → 404; gọi lần hai → 404', async () => {
+      const { h, admin, chore } = await archivedChoreWithSlots();
+      const other = await fx.houseWith(['Mai', 'Quân']);
+      await fx.as(h.users[1].token).delete(purgeUrl(h.houseId, chore.id)).expect(403);
+      await fx.as(other.users[0].token).delete(purgeUrl(other.houseId, chore.id)).expect(404);
+      await admin.delete(purgeUrl(h.houseId, chore.id)).expect(204);
+      await admin.delete(purgeUrl(h.houseId, chore.id)).expect(404);
+    });
+
+    it('archived=true trả canPurge đúng cho việc có và không có lịch sử', async () => {
+      const clean = await archivedChoreWithSlots();
+      const used = await archivedChoreWithSlots();
+      await fx.prisma.choreAssignment.update({ where: { id: used.slots[0].id }, data: { status: 'DONE' } });
+      const flag = async (ctx: typeof clean) =>
+        ((await ctx.admin.get(url(ctx.h.houseId, '?archived=true')).expect(200)).body as { id: string; canPurge: boolean }[]).find((c) => c.id === ctx.chore.id)?.canPurge;
+      expect(await flag(clean)).toBe(true);
+      expect(await flag(used)).toBe(false);
+    });
+
+    it('hai purge song song cùng việc: một 204, bên kia 404 hoặc 409, không 500', async () => {
+      const { h, admin, chore } = await archivedChoreWithSlots();
+      const results = await Promise.all([admin.delete(purgeUrl(h.houseId, chore.id)), admin.delete(purgeUrl(h.houseId, chore.id))]);
+      const codes = results.map((r) => r.status).sort((a, b) => a - b);
+      expect(codes[0]).toBe(204);
+      expect([404, 409]).toContain(codes[1]);
+      expect(await fx.prisma.chore.count({ where: { id: chore.id } })).toBe(0);
     });
   });
 
