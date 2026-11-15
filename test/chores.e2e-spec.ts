@@ -239,6 +239,59 @@ describe('Chores (e2e)', () => {
     });
   });
 
+  describe('việc đột xuất (ADHOC)', () => {
+    const makeAdhoc = async (token: string, houseId: string, title = 'Mang rác xuống') =>
+      (await fx.as(token).post(url(houseId), { title, weight: 1, frequency: 'ADHOC' }).expect(201)).body as { id: string };
+    const slotsOf = (choreId: string) => fx.prisma.choreAssignment.findMany({ where: { choreId } });
+
+    it('nhà 1 người: tạo việc đột xuất → ca TODO của chính họ', async () => {
+      const h = await fx.houseWith(['Hùng']);
+      const chore = await makeAdhoc(h.users[0].token, h.houseId);
+      const slots = await slotsOf(chore.id);
+      expect(slots).toHaveLength(1);
+      expect(slots[0]).toMatchObject({ status: 'TODO', slotIndex: 0, titleSnapshot: 'Mang rác xuống' });
+      expect(slots[0].assigneeId).not.toBeNull();
+    });
+
+    it('nhà nhiều người: ca UNASSIGNED; một người nhận được, người nhận thứ hai nhận 409', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+      const chore = await makeAdhoc(h.users[0].token, h.houseId);
+      const [slot] = await slotsOf(chore.id);
+      expect(slot).toMatchObject({ status: 'UNASSIGNED', assigneeId: null });
+
+      const claim = (i: number) => fx.as(h.users[i].token).post(`/api/v1/assignments/${slot.id}/claim`);
+      const [a, b] = await Promise.all([claim(1), claim(2)]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+      const after = await fx.prisma.choreAssignment.findUniqueOrThrow({ where: { id: slot.id } });
+      expect(after).toMatchObject({ status: 'TODO', source: 'CLAIM', version: slot.version + 1 });
+      expect(after.assigneeId).not.toBeNull();
+      expect((await fx.prisma.choreAuditLog.findMany({ where: { houseId: h.houseId } })).map((l) => l.action)).toContain('ASSIGNMENT_CLAIMED');
+    });
+
+    it('ca đã có người nhận → 409; người ở nhà khác → 404', async () => {
+      const a = await fx.houseWith(['Hùng', 'Thiện']);
+      const b = await fx.houseWith(['Mai', 'Quân']);
+      const chore = await makeAdhoc(a.users[0].token, a.houseId);
+      const [slot] = await slotsOf(chore.id);
+      await fx.as(b.users[0].token).post(`/api/v1/assignments/${slot.id}/claim`).expect(404);
+      await fx.as(a.users[1].token).post(`/api/v1/assignments/${slot.id}/claim`).expect(200);
+      await fx.as(a.users[0].token).post(`/api/v1/assignments/${slot.id}/claim`).expect(409);
+    });
+
+    it('lưu trữ việc đột xuất hủy ca UNASSIGNED chưa ai nhận', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const chore = await makeAdhoc(h.users[0].token, h.houseId);
+      await fx.as(h.users[0].token).delete(url(h.houseId, `/${chore.id}`)).expect(200);
+      expect((await slotsOf(chore.id)).every((s) => s.status === 'CANCELLED')).toBe(true);
+    });
+
+    it('việc định kỳ không tạo ca ngay khi tạo (chỉ ADHOC)', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const chore = (await fx.as(h.users[0].token).post(url(h.houseId), { title: 'Dọn bếp', weight: 2, frequency: 'DAILY' }).expect(201)).body as { id: string };
+      expect(await slotsOf(chore.id)).toHaveLength(0);
+    });
+  });
+
   describe('xóa vĩnh viễn', () => {
     const purgeUrl = (houseId: string, id: string) => url(houseId, `/${id}/permanent`);
     /** Việc đã lưu trữ kèm các ca sinh cho tuần sau. */
