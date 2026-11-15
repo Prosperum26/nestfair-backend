@@ -1,11 +1,11 @@
 import { HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { coded } from '../../common/coded-exception.js';
-import type { Chore } from '../../generated/prisma/client.js';
+import type { Chore, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ChoreDebtService } from '../swaps/chore-debt.service.js';
 import { ActivityService } from '../activity/activity.service.js';
 import { actorOfMember } from '../events/actor.js';
-import { EventsService } from '../events/events.service.js';
+import { EventsService, type Outbox } from '../events/events.service.js';
 import { AuditService } from './audit.service.js';
 import { hasChoreHistory } from './chore-history.js';
 import { normalizeChore } from './chore-rules.js';
@@ -72,6 +72,7 @@ export class ChoresService {
     const row = await this.prisma.chore.findFirst({ where: { id: choreId, houseId } });
     if (!row) throw new NotFoundException('Không tìm thấy việc này.');
     if (row.isSystem) throw coded(HttpStatus.FORBIDDEN, 'SYSTEM_CHORE', 'Đây là việc hệ thống của vòng quay, không sửa hay tắt được.');
+    if (row.archivedAt) throw coded(HttpStatus.CONFLICT, 'CHORE_ARCHIVED', 'Việc này đã được lưu trữ. Hãy khôi phục trước khi chỉnh sửa.');
 
     const shape = normalizeChore({
       frequency: dto.frequency ?? row.frequency,
@@ -108,22 +109,23 @@ export class ChoresService {
     if (row.isSystem) throw coded(HttpStatus.FORBIDDEN, 'SYSTEM_CHORE', 'Đây là việc hệ thống của vòng quay, không lưu trữ được.');
     if (row.archivedAt) return toDto(row);
 
+    const actor = await actorOfMember(this.prisma, actorMemberId);
+    const outbox = this.events.outbox();
+    // Cả quá trình nằm trong một transaction: lỗi giữa chừng thì việc không bị đánh dấu lưu trữ nửa vời, thử lại được.
     // Điều kiện `archivedAt: null` để hai lần lưu trữ song song chỉ một bên ghi nhật ký và hủy ca.
-    const claimed = await this.prisma.chore.updateMany({ where: { id: choreId, houseId, archivedAt: null }, data: { archivedAt: now, isActive: false } });
-    const updated = await this.prisma.chore.findUniqueOrThrow({ where: { id: choreId } });
-    if (claimed.count === 0) return toDto(updated);
-
-    await this.audit.log(houseId, actorMemberId, 'CHORE_ARCHIVED', { choreId, title: row.title });
-    if (row.isActive) {
-      await this.deactivate(houseId, actorMemberId, updated, now, 'chore.archived');
-    } else {
-      const actor = await actorOfMember(this.prisma, actorMemberId);
-      const outbox = this.events.outbox();
-      await this.prisma.$transaction((tx) =>
-        this.activity.record(tx, outbox, { houseId, type: 'chore.archived', actor, params: { choreId, choreTitle: row.title, cancelled: 0 } }),
-      );
-      outbox.flush();
-    }
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.chore.updateMany({ where: { id: choreId, houseId, archivedAt: null }, data: { archivedAt: now, isActive: false } });
+      const current = await tx.chore.findUniqueOrThrow({ where: { id: choreId } });
+      if (claimed.count === 0) return current;
+      await this.audit.log(houseId, actorMemberId, 'CHORE_ARCHIVED', { choreId, title: row.title }, {}, tx);
+      if (row.isActive) {
+        await this.deactivateIn(tx, outbox, houseId, actorMemberId, actor, current, now, 'chore.archived');
+      } else {
+        await this.activity.record(tx, outbox, { houseId, type: 'chore.archived', actor, params: { choreId, choreTitle: row.title, cancelled: 0 } });
+      }
+      return current;
+    });
+    outbox.flush();
     return toDto(updated);
   }
 
@@ -160,12 +162,23 @@ export class ChoresService {
    * S-28: tắt việc thì ca TODO / chưa có người ở tương lai thành CANCELLED (lịch sử giữ nguyên).
    * Hủy ca, nhật ký và Live Ticker (một mục cho cả việc) ghi cùng một transaction.
    */
-  private async deactivate(
+  private async deactivate(houseId: string, actorMemberId: string, chore: Chore, now: Date): Promise<void> {
+    const actor = await actorOfMember(this.prisma, actorMemberId);
+    const outbox = this.events.outbox();
+    await this.prisma.$transaction((tx) => this.deactivateIn(tx, outbox, houseId, actorMemberId, actor, chore, now, 'chore.paused'));
+    outbox.flush();
+  }
+
+  /** Phần hủy ca của việc tắt / lưu trữ, chạy trong transaction của người gọi. */
+  private async deactivateIn(
+    tx: Prisma.TransactionClient,
+    outbox: Outbox,
     houseId: string,
     actorMemberId: string,
+    actor: Awaited<ReturnType<typeof actorOfMember>>,
     chore: Chore,
     now: Date,
-    activityType: 'chore.paused' | 'chore.archived' = 'chore.paused',
+    activityType: 'chore.paused' | 'chore.archived',
   ): Promise<void> {
     const where = {
       houseId,
@@ -173,18 +186,13 @@ export class ChoresService {
       status: { in: ['TODO', 'UNASSIGNED'] as ('TODO' | 'UNASSIGNED')[] },
       dueAt: { gt: now },
     };
-    const actor = await actorOfMember(this.prisma, actorMemberId);
-    const outbox = this.events.outbox();
-    await this.prisma.$transaction(async (tx) => {
-      const ids = (await tx.choreAssignment.findMany({ where, select: { id: true } })).map((r) => r.id);
-      if (ids.length > 0) {
-        await tx.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED', version: { increment: 1 } } });
-        await this.debts.onAssignmentsCancelled(tx, outbox, ids, now);
-        outbox.toHouse(houseId, 'chore:cancelled', { choreId: chore.id, assignmentIds: ids }, actor);
-      }
-      await this.audit.log(houseId, actorMemberId, 'CHORE_DEACTIVATED', { choreId: chore.id, cancelled: ids.length }, {}, tx);
-      await this.activity.record(tx, outbox, { houseId, type: activityType, actor, params: { choreId: chore.id, choreTitle: chore.title, cancelled: ids.length } });
-    });
-    outbox.flush();
+    const ids = (await tx.choreAssignment.findMany({ where, select: { id: true } })).map((r) => r.id);
+    if (ids.length > 0) {
+      await tx.choreAssignment.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'CANCELLED', version: { increment: 1 } } });
+      await this.debts.onAssignmentsCancelled(tx, outbox, ids, now);
+      outbox.toHouse(houseId, 'chore:cancelled', { choreId: chore.id, assignmentIds: ids }, actor);
+    }
+    await this.audit.log(houseId, actorMemberId, 'CHORE_DEACTIVATED', { choreId: chore.id, cancelled: ids.length }, {}, tx);
+    await this.activity.record(tx, outbox, { houseId, type: activityType, actor, params: { choreId: chore.id, choreTitle: chore.title, cancelled: ids.length } });
   }
 }

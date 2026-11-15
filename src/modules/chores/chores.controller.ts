@@ -92,6 +92,7 @@ export class ChoresController {
   @ApiErrors(
     [403, 'Code `SYSTEM_CHORE` for the Lucky Wheel system chore, or the caller is not the admin.'],
     [404, 'The chore does not belong to this house.'],
+    [409, 'Code `CHORE_ARCHIVED`: the chore is archived; restore it first.'],
   )
   update(
     @CurrentMembership() m: HouseMembership,

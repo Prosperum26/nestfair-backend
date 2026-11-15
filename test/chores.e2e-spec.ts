@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 import { ScheduleService } from '../src/modules/chores/schedule.service.js';
 import { addDays, currentWeekStart, openAtOf } from '../src/modules/chores/week.js';
 import { EventsService } from '../src/modules/events/events.service.js';
+import { ChoreDebtService } from '../src/modules/swaps/chore-debt.service.js';
 import { createFixture } from './support/house-fixture.js';
 
 describe('Chores (e2e)', () => {
@@ -202,6 +203,31 @@ describe('Chores (e2e)', () => {
       expect(res.body).toMatchObject({ archivedAt: null, isActive: false });
       expect((await admin.get(url(h.houseId, '?includeInactive=true')).expect(200)).body).toHaveLength(1);
       expect(await actionsOf(h.houseId)).toContain('CHORE_RESTORED');
+    });
+
+    it('PATCH việc đã lưu trữ → 409 CHORE_ARCHIVED, không bật lại được', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện']);
+      const chore = await makeChore(h.users[0].token, h.houseId);
+      const admin = fx.as(h.users[0].token);
+      await admin.delete(url(h.houseId, `/${chore.id}`)).expect(200);
+      const res = await admin.patch(url(h.houseId, `/${chore.id}`), { isActive: true }).expect(409);
+      expect(JSON.stringify(res.body)).toContain('CHORE_ARCHIVED');
+      expect(await fx.prisma.chore.findUniqueOrThrow({ where: { id: chore.id } })).toMatchObject({ isActive: false });
+    });
+
+    it('lưu trữ là một transaction: hủy ca lỗi thì việc không bị đánh dấu lưu trữ và thử lại được', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+      const chore = await makeChore(h.users[0].token, h.houseId);
+      await fx.app.get(ScheduleService).ensureSchedule(h.houseId, addDays(currentWeekStart(), 7), 'CRON', openAtOf(currentWeekStart()));
+      const admin = fx.as(h.users[0].token);
+      const debts = fx.app.get(ChoreDebtService);
+      const spy = vi.spyOn(debts, 'onAssignmentsCancelled').mockRejectedValueOnce(new Error('boom'));
+      await admin.delete(url(h.houseId, `/${chore.id}`)).expect(500);
+      spy.mockRestore();
+      expect(await fx.prisma.chore.findUniqueOrThrow({ where: { id: chore.id } })).toMatchObject({ archivedAt: null, isActive: true });
+      await admin.delete(url(h.houseId, `/${chore.id}`)).expect(200);
+      const slots = await fx.prisma.choreAssignment.findMany({ where: { choreId: chore.id } });
+      expect(slots.every((s) => s.status === 'CANCELLED')).toBe(true);
     });
 
     it('việc đã lưu trữ không sinh ca khi chạy sinh lịch tuần', async () => {
