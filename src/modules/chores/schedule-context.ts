@@ -86,8 +86,8 @@ export async function buildGenContext(db: Db, houseId: string, weekStart: DateSt
           weekStart: { in: scheduled.map((s) => s.weekStart) },
           assigneeId: { not: null },
           status: { in: [...COUNTED_STATUSES] },
-          // Q2 (#5): ca vòng quay không tính rào, không tính tải.
-          source: { not: 'WHEEL' },
+          // Q2 (#5): ca vòng quay không tính rào, không tính tải. Ca tự nhận (việc đột xuất) cũng không phải xoay vòng.
+          source: { notIn: ['WHEEL', 'CLAIM'] },
         },
         select: { choreId: true, assigneeId: true, weightSnapshot: true, source: true, weekStart: true },
       })
