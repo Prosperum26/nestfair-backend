@@ -239,6 +239,26 @@ describe('Chores (e2e)', () => {
     });
   });
 
+  describe('tạm ngưng rồi bật lại', () => {
+    it('bật lại sinh lại các ca đã bị hủy ở tương lai, có người làm, không thêm ca trùng', async () => {
+      const h = await fx.houseWith(['Hùng', 'Thiện', 'Mai']);
+      const chore = (await fx.as(h.users[0].token).post(url(h.houseId), { title: 'Dọn bếp', weight: 2, frequency: 'DAILY' }).expect(201)).body as { id: string };
+      await fx.app.get(ScheduleService).ensureSchedule(h.houseId, addDays(currentWeekStart(), 7), 'CRON', openAtOf(currentWeekStart()));
+      const admin = fx.as(h.users[0].token);
+      await admin.patch(url(h.houseId, `/${chore.id}`), { isActive: false }).expect(200);
+      expect((await fx.prisma.choreAssignment.findMany({ where: { choreId: chore.id } })).every((s) => s.status === 'CANCELLED')).toBe(true);
+
+      await admin.patch(url(h.houseId, `/${chore.id}`), { isActive: true }).expect(200);
+      const slots = await fx.prisma.choreAssignment.findMany({ where: { choreId: chore.id } });
+      expect(slots).toHaveLength(7);
+      expect(slots.every((s) => s.status === 'TODO' && s.assigneeId !== null)).toBe(true);
+
+      // Bật lại lần nữa (đã bật) không đổi gì.
+      await admin.patch(url(h.houseId, `/${chore.id}`), { isActive: true }).expect(200);
+      expect(await fx.prisma.choreAssignment.count({ where: { choreId: chore.id } })).toBe(7);
+    });
+  });
+
   describe('việc đột xuất (ADHOC)', () => {
     const makeAdhoc = async (token: string, houseId: string, title = 'Mang rác xuống') =>
       (await fx.as(token).post(url(houseId), { title, weight: 1, frequency: 'ADHOC' }).expect(201)).body as { id: string };

@@ -8,6 +8,7 @@ import { actorOfMember } from '../events/actor.js';
 import { EventsService, type Outbox } from '../events/events.service.js';
 import { AuditService } from './audit.service.js';
 import { hasChoreHistory } from './chore-history.js';
+import { ScheduleService } from './schedule.service.js';
 import { normalizeChore } from './chore-rules.js';
 import { dateOf } from './schedule-context.js';
 import { addDays, dueAtOf, toDateStr, weekKeyFromStart, weekStartOf } from './week.js';
@@ -38,6 +39,7 @@ export class ChoresService {
     private readonly events: EventsService,
     private readonly activity: ActivityService,
     private readonly debts: ChoreDebtService,
+    private readonly schedule: ScheduleService,
   ) {}
 
   async list(houseId: string, opts: { includeInactive?: boolean; archived?: boolean } = {}): Promise<ChoreDto[]> {
@@ -127,6 +129,7 @@ export class ChoresService {
       await this.deactivate(houseId, actorMemberId, updated, now);
     } else if (!row.isActive && updated.isActive) {
       await this.audit.log(houseId, actorMemberId, 'CHORE_ACTIVATED', { choreId });
+      await this.schedule.refillChore(houseId, choreId, now);
     }
     return toDto(updated);
   }
