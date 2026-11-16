@@ -11,7 +11,7 @@ import { ChoreDebtService } from '../swaps/chore-debt.service.js';
 import { AuditService } from './audit.service.js';
 import { buildGenContext, dateOf, type Db, dsOf } from './schedule-context.js';
 import { createScheduleRows, scheduleFields, storeSlots } from './schedule-store.js';
-import { addDays, currentWeekStart, type DateStr, toDateStr } from './week.js';
+import { addDays, currentWeekStart, type DateStr, dueAtOf, toDateStr } from './week.js';
 
 export const MAX_REROLLS = 2;
 const REROLL_TRIES = 20;
@@ -199,6 +199,54 @@ export class ScheduleService {
     });
     outbox.flush();
     return out;
+  }
+
+  /**
+   * Việc được bật lại sau khi tạm ngưng: sinh lại các ca còn hạn của tuần này và tuần sau mà lúc tắt đã bị hủy.
+   * Chỉ chạy thuật toán cho riêng việc này (ca của việc khác giữ nguyên) nên rào R-FAIR của việc này vẫn được tôn trọng,
+   * còn ràng buộc "tối đa ca mỗi người mỗi ngày" với việc khác thì không tính. Ngày nghỉ nhà / vắng do thuật toán loại sẵn.
+   * Ca đã có trạng thái khác CANCELLED không bị đụng tới, nên gọi lại nhiều lần vẫn an toàn. Trả số ca đã sinh lại.
+   */
+  async refillChore(houseId: string, choreId: string, now: Date = new Date()): Promise<number> {
+    const cur = currentWeekStart(now);
+    const outbox = this.events.outbox();
+    let restored = 0;
+    await this.withHouseLock(houseId, async (tx) => {
+      for (const weekStart of [cur, addDays(cur, 7)]) {
+        const sched = await tx.weekSchedule.findUnique({ where: { houseId_weekStart: { houseId, weekStart: dateOf(weekStart) } } });
+        if (!sched || sched.status === 'EMPTY') continue; // tuần chưa có lịch: lúc sinh lịch việc này sẽ được tính.
+        const ctx = await buildGenContext(tx, houseId, weekStart, randomSeed());
+        const chore = ctx.chores.get(choreId);
+        if (!chore) continue;
+        const res = generateWeek({ ...ctx.input, chores: ctx.input.chores.filter((c) => c.id === choreId) });
+        for (const slot of res.slots) {
+          const dueAt = dueAtOf(slot.occurrenceDate, chore.dueTime);
+          if (dueAt.getTime() <= now.getTime()) continue;
+          const where = { choreId_occurrenceDate_slotIndex: { choreId, occurrenceDate: dateOf(slot.occurrenceDate), slotIndex: slot.slotIndex } };
+          const existing = await tx.choreAssignment.findUnique({ where });
+          if (existing && existing.status !== 'CANCELLED') continue;
+          const base = {
+            scheduleId: sched.id,
+            assigneeId: slot.memberId,
+            originalAssigneeId: slot.memberId,
+            dueAt,
+            titleSnapshot: chore.title,
+            weightSnapshot: chore.weight,
+            source: slot.source,
+            status: slot.memberId ? ('TODO' as const) : ('UNASSIGNED' as const),
+          };
+          if (existing) await tx.choreAssignment.update({ where: { id: existing.id }, data: { ...base, version: { increment: 1 } } });
+          else {
+            await tx.choreAssignment.create({
+              data: { houseId, choreId, weekKey: sched.weekKey, weekStart: sched.weekStart, occurrenceDate: dateOf(slot.occurrenceDate), slotIndex: slot.slotIndex, ...base },
+            });
+          }
+          restored++;
+        }
+      }
+    });
+    outbox.flush();
+    return restored;
   }
 
   /**

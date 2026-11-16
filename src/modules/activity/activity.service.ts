@@ -19,6 +19,8 @@ export type ActivityType =
   | 'chore.auto_approved'
   | 'chore.missed_streak'
   | 'chore.paused'
+  | 'chore.archived'
+  | 'chore.claimed'
   | 'schedule.generated'
   | 'schedule.rerolled'
   | 'override.force_done'

@@ -8,4 +8,10 @@ export class ListChoresQuery {
   @Transform(({ value }: { value: unknown }) => value === 'true' || value === true)
   @IsBoolean()
   includeInactive?: boolean;
+
+  @ApiPropertyOptional({ description: 'When true, returns only archived chores (and `includeInactive` is ignored). Default false.' })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => value === 'true' || value === true)
+  @IsBoolean()
+  archived?: boolean;
 }

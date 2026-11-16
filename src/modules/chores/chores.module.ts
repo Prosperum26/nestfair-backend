@@ -10,6 +10,7 @@ import { AssignmentActionsController } from './assignment-actions.controller.js'
 import { AssignmentsController } from './assignments.controller.js';
 import { AssignmentsService } from './assignments.service.js';
 import { CheckinService } from './checkin.service.js';
+import { ClaimService } from './claim.service.js';
 import { VerifyService } from './verify.service.js';
 import { AuditService } from './audit.service.js';
 import { ScheduleService } from './schedule.service.js';
@@ -29,7 +30,7 @@ import { ChoresService } from './chores.service.js';
     BreaksController,
     ChoreAuditController,
   ],
-  providers: [ChoresService, ChoreSettingsService, AssignmentsService, CheckinService, VerifyService, ScheduleService, AuditService, AbsencesService, BreaksService],
+  providers: [ChoresService, ChoreSettingsService, AssignmentsService, CheckinService, ClaimService, VerifyService, ScheduleService, AuditService, AbsencesService, BreaksService],
   exports: [ScheduleService, AuditService],
 })
 export class ChoresModule {}

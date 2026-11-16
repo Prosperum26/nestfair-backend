@@ -30,6 +30,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import type { AuthUser } from '../auth/strategies/jwt.strategy.js';
 import type { UploadedImage } from '../uploads/image-validation.js';
 import { CheckinService } from './checkin.service.js';
+import { ClaimService } from './claim.service.js';
 import { AssignmentDto } from './dto/assignment-response.dto.js';
 import { OverrideAssignmentDto } from './dto/override-assignment.dto.js';
 import { VerifyAssignmentDto } from './dto/verify-assignment.dto.js';
@@ -55,6 +56,7 @@ export class AssignmentActionsController {
   constructor(
     private readonly checkin: CheckinService,
     private readonly verifyService: VerifyService,
+    private readonly claimService: ClaimService,
   ) {}
 
   @Post('checkin')
@@ -91,6 +93,20 @@ export class AssignmentActionsController {
     @Headers('idempotency-key') idempotencyKey: string | undefined,
   ): Promise<AssignmentDto> {
     return this.checkin.checkin(user.id, assignmentId, file, idempotencyKey?.trim() || undefined);
+  }
+
+  @Post('claim')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Claim an unassigned ad-hoc chore',
+    description:
+      'An active member of the house takes an UNASSIGNED assignment of an ad-hoc chore. It becomes theirs (TODO, source CLAIM). ' +
+      'Two people claiming at once is safe: the second receives 409. Broadcasts `chore:reassigned`.',
+  })
+  @ApiOkResponse({ type: AssignmentDto, description: 'The assignment, now TODO and assigned to the caller.' })
+  @ApiErrors([409, 'Code `ASSIGNMENT_STATE_CHANGED`: the assignment already has an assignee (or is no longer open).'])
+  claim(@CurrentUser() user: AuthUser, @Param('assignmentId') assignmentId: string): Promise<AssignmentDto> {
+    return this.claimService.claim(user.id, assignmentId);
   }
 
   @Patch('verify')
