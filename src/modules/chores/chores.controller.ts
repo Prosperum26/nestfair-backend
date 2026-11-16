@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -12,6 +14,7 @@ import {
 import {
   ApiBearerAuth,
   ApiCreatedResponse,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -48,14 +51,14 @@ export class ChoresController {
     summary: 'List chores',
     description:
       'Returns the recurring chores defined for the house. By default only active chores are returned; pass ' +
-      '`includeInactive=true` to include paused ones. The system chore used by the Lucky Wheel is not a normal chore and is not listed.',
+      '`includeInactive=true` to include paused ones, or `archived=true` to list only archived ones. The system chore used by the Lucky Wheel is not a normal chore and is not listed.',
   })
   @ApiOkResponse({ type: [ChoreDto], description: 'Chores of the house.' })
   list(
     @CurrentMembership() m: HouseMembership,
     @Query() query: ListChoresQuery,
   ): Promise<ChoreDto[]> {
-    return this.chores.list(m.houseId, query.includeInactive);
+    return this.chores.list(m.houseId, { includeInactive: query.includeInactive, archived: query.archived });
   }
 
   @Post()
@@ -89,6 +92,7 @@ export class ChoresController {
   @ApiErrors(
     [403, 'Code `SYSTEM_CHORE` for the Lucky Wheel system chore, or the caller is not the admin.'],
     [404, 'The chore does not belong to this house.'],
+    [409, 'Code `CHORE_ARCHIVED`: the chore is archived; restore it first.'],
   )
   update(
     @CurrentMembership() m: HouseMembership,
@@ -96,5 +100,73 @@ export class ChoresController {
     @Body() dto: UpdateChoreDto,
   ): Promise<ChoreDto> {
     return this.chores.update(m.houseId, m.id, choreId, dto);
+  }
+
+  @Delete(':choreId')
+  @HouseRoles('ADMIN')
+  @ApiParam({ name: 'choreId', format: 'uuid', description: 'Id of the chore.' })
+  @ApiOperation({
+    summary: 'Archive a chore (admin)',
+    description:
+      'The "delete" of the UI. The chore disappears from every list and is never scheduled again, but its history, points and ' +
+      'debts are kept. An active chore has its future TODO or unassigned slots cancelled (same as pausing). Idempotent: ' +
+      'archiving an archived chore returns it unchanged. Admin only.',
+  })
+  @ApiOkResponse({ type: ChoreDto, description: 'The archived chore.' })
+  @ApiErrors(
+    [403, 'Code `SYSTEM_CHORE` for the Lucky Wheel system chore, or the caller is not the admin.'],
+    [404, 'The chore does not belong to this house.'],
+  )
+  archive(
+    @CurrentMembership() m: HouseMembership,
+    @Param('choreId', ParseUUIDPipe) choreId: string,
+  ): Promise<ChoreDto> {
+    return this.chores.archive(m.houseId, m.id, choreId);
+  }
+
+  @Post(':choreId/restore')
+  @HttpCode(200)
+  @HouseRoles('ADMIN')
+  @ApiParam({ name: 'choreId', format: 'uuid', description: 'Id of the chore.' })
+  @ApiOperation({
+    summary: 'Restore an archived chore (admin)',
+    description:
+      'Brings an archived chore back as a paused chore (`isActive` stays false): the admin re-enables it to schedule it again. Admin only.',
+  })
+  @ApiOkResponse({ type: ChoreDto, description: 'The restored (paused) chore.' })
+  @ApiErrors(
+    [403, 'The caller is not the admin.'],
+    [404, 'The chore does not belong to this house.'],
+    [409, 'Code `CHORE_NOT_ARCHIVED`: the chore is not archived.'],
+  )
+  restore(
+    @CurrentMembership() m: HouseMembership,
+    @Param('choreId', ParseUUIDPipe) choreId: string,
+  ): Promise<ChoreDto> {
+    return this.chores.restore(m.houseId, m.id, choreId);
+  }
+
+  @Delete(':choreId/permanent')
+  @HttpCode(204)
+  @HouseRoles('ADMIN')
+  @ApiParam({ name: 'choreId', format: 'uuid', description: 'Id of the chore.' })
+  @ApiOperation({
+    summary: 'Delete an archived chore permanently (admin)',
+    description:
+      'Removes the chore and its never-used slots from the database. Only allowed when the chore is archived and has never had ' +
+      'any activity (no done, submitted, rejected or missed slot, no debt, swap request or wheel result). The archived list marks ' +
+      'such chores with `canPurge: true`. Admin only.',
+  })
+  @ApiNoContentResponse({ description: 'The chore was deleted.' })
+  @ApiErrors(
+    [403, 'The caller is not the admin.'],
+    [404, 'The chore does not belong to this house (or was already deleted).'],
+    [409, 'Code `CHORE_NOT_ARCHIVED` (archive it first) or `CHORE_HAS_HISTORY` (it can only stay archived).'],
+  )
+  purge(
+    @CurrentMembership() m: HouseMembership,
+    @Param('choreId', ParseUUIDPipe) choreId: string,
+  ): Promise<void> {
+    return this.chores.purge(m.houseId, m.id, choreId);
   }
 }
